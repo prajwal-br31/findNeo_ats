@@ -25,3 +25,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .semgrep-venv/
+
+# Local agent/session settings
+.claude/settings.local.json
