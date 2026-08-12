@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+var/
+pnpm-lock.yaml
+
+# The specification is prose with deliberate formatting — Prettier reflows
+# tables and breaks the diff-ability that review depends on.
+spec/
+AGENTS.md
