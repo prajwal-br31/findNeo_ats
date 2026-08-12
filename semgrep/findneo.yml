@@ -1,0 +1,172 @@
+# T-003 — the seven custom Semgrep rules (05a §9).
+#
+# One rule per class of mistake this architecture can make. These are the seven
+# most likely to appear in generated code and least likely to be caught in
+# review, because each one looks completely normal in isolation.
+#
+# Proven against planted violations by `pnpm verify:semgrep`, which also asserts
+# that the control files stay clean — a rule that fires on everything is as
+# useless as one that fires on nothing.
+
+rules:
+  # 1 ── ER-031 / SEC-042 / AGENTS.md §3.2
+  - id: findneo-raw-sql-interpolation
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      SQL built by interpolation. Parameterise always — including identifiers,
+      including UUIDs, including values that came from our own database (ER-031,
+      SEC-042). Drizzle's sql`` tag parameterises for you; sql.raw() does not.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $C.query($SQL, ...)
+              - pattern: $C.execute($SQL, ...)
+              - pattern: $C.unsafe($SQL, ...)
+          - metavariable-regex:
+              metavariable: $SQL
+              regex: .*\$\{.*
+      - pattern: sql.raw(...)
+      - pattern: $C.query($A + $B, ...)
+      - pattern: $C.execute($A + $B, ...)
+
+  # 2 ── ER-006
+  - id: findneo-database-access-outside-repository
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Database access outside a repository (ER-006). No SQL, no ORM call, and no
+      `db.` reference belongs in a BFF, controller, application service, domain
+      entity, route, or utility. Move the query into infrastructure/.
+    paths:
+      exclude:
+        - '**/src/modules/*/infrastructure/**'
+        - '**/src/platform/db/**'
+        - '**/scripts/**'
+    patterns:
+      - pattern-either:
+          - pattern: $DB.select(...)
+          - pattern: $DB.insert(...)
+          - pattern: $DB.update(...)
+          - pattern: $DB.delete(...)
+          - pattern: $DB.transaction(...)
+          - pattern: $DB.query(...)
+      - metavariable-regex:
+          metavariable: $DB
+          regex: ^(db|tx|trx|database|dbClient|drizzle|pool)$
+
+  # 3 ── ER-011 / D-004
+  - id: findneo-external-sdk-outside-platform
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      External SDKs appear only in src/platform/ (ER-011, D-004). This import must
+      sit behind a port, so the on-premise implementation can differ and tests can
+      fake it. A cache library imported in a service is a violation even if it works.
+    paths:
+      exclude:
+        - '**/src/platform/**'
+        - '**/scripts/**'
+    # Matched textually rather than structurally: `import ... from 'x'` is not a
+    # valid Semgrep pattern for JS/TS, and enumerating every import form
+    # (default, named, namespace, type-only, side-effect) for every package
+    # produces a matrix that is easy to leave a hole in.
+    #
+    # Four acquisition forms, each with its own planted fixture so a hole in the
+    # matrix fails `pnpm verify:semgrep` rather than passing quietly:
+    #   1. static     import x from 'pg' / import {x} from 'pg' / import type
+    #   2. side-effect  import 'pg'
+    #   3. commonjs   require('pg')
+    #   4. dynamic    await import('pg')
+    # The package alternation is identical in all four and must stay that way.
+    pattern-either:
+      - pattern-regex: (?m)^\s*import\s[^;]*?from\s*['"](?:pg|pg-boss|nodemailer|lru-cache|drizzle-orm|drizzle-kit|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]
+      - pattern-regex: (?m)^\s*import\s+['"](?:pg|pg-boss|nodemailer|lru-cache|drizzle-orm|drizzle-kit|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]
+      - pattern-regex: require\(\s*['"](?:pg|pg-boss|nodemailer|lru-cache|drizzle-orm|drizzle-kit|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]\s*\)
+      - pattern-regex: (?<!\w)import\(\s*['"](?:pg|pg-boss|nodemailer|lru-cache|drizzle-orm|drizzle-kit|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]\s*\)
+
+  # 4 ── ER-025 / SEC-031
+  - id: findneo-spread-into-response
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Never spread a row into a response (ER-025, SEC-031). Name every field
+      explicitly. A new column must not be able to reach an API response by
+      accident — that is how password hashes and refresh tokens leak.
+    paths:
+      include:
+        - '**/*.mapper.ts'
+        - '**/mappers/**'
+        - '**/*.presenter.ts'
+    pattern-either:
+      - pattern: return { ..., ...$ROW };
+      - pattern: return { ...$ROW, ... };
+
+  # 5 ── ER-023 / SEC-041 / AGENTS.md §3.4
+  - id: findneo-company-id-from-client
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Tenant identity comes from the session, never from the client (ER-023,
+      SEC-041). A companyId in a body, query string, or header is ignored or
+      rejected — never used to scope a query.
+    pattern-either:
+      - pattern: $REQ.body.companyId
+      - pattern: $REQ.query.companyId
+      - pattern: $REQ.params.companyId
+      - pattern: $REQ.headers['x-company-id']
+      - pattern: $REQ.headers["x-company-id"]
+
+  # 6 ── ER-018 / SEC-004 / AGENTS.md §3.3
+  - id: findneo-tenant-binding-not-transaction-local
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Tenant context must be transaction-local: set_config(..., true) inside one
+      transaction (ER-018, SEC-004). `SET` without `LOCAL`, or set_config with
+      false, leaks the binding to the next request that reuses the connection.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $C.query($SQL, ...)
+              - pattern: $C.execute($SQL, ...)
+          - metavariable-regex:
+              metavariable: $SQL
+              regex: (?i)[`'"]\s*SET\s+(?!LOCAL\b)
+      - pattern-regex: set_config\([^)]*,\s*false\s*\)
+
+  # 7 ── ER-052 / SEC-017
+  - id: findneo-non-constant-time-secret-comparison
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Compare secrets with timingSafeEqual, never === (ER-052, SEC-017). Token and
+      hash comparison leaks length and content through timing.
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $A === $B
+              - pattern: $A !== $B
+              - pattern: $A == $B
+              - pattern: $A != $B
+          - metavariable-regex:
+              metavariable: $A
+              regex: (?i)^[a-z0-9_.]*(token|hash)[a-z0-9_.]*$
+          - pattern-not: $A === "..."
+          - pattern-not: $A !== "..."
+          - pattern-not: $A === null
+          - pattern-not: $A !== null
+          - pattern-not: $A === undefined
+          - pattern-not: $A !== undefined
+      - patterns:
+          - pattern-either:
+              - pattern: $A === $B
+              - pattern: $A !== $B
+          - metavariable-regex:
+              metavariable: $B
+              regex: (?i)^[a-z0-9_.]*(token|hash)[a-z0-9_.]*$
+          # Quoted: a YAML plain scalar may not begin with a double quote.
+          - pattern-not: '"..." === $B'
+          - pattern-not: '"..." !== $B'
+          - pattern-not: null === $B
+          - pattern-not: undefined === $B

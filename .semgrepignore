@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+var/
+.git/
+pnpm-lock.yaml
+
+# NOT ignored: fixtures/ — the planted violations are scanned deliberately by
+# `pnpm verify:semgrep`, which asserts each rule still fires.
