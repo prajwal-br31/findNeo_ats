@@ -1,0 +1,8 @@
+# LF in the repository regardless of the checkout platform. Development happens
+# on Windows; the containers this ships in are Linux.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
+*.xlsx binary

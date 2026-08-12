@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment — never committed (ER-046, SEC-060)
+.env
+.env.*
+!.env.example
+
+# Local filesystem StoragePort root (D-004)
+var/storage/
+
+# Test and coverage output
+coverage/
+*.log
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.semgrep-venv/

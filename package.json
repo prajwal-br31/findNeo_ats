@@ -1,0 +1,52 @@
+{
+  "name": "findneo-backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22.22.0 <23",
+    "pnpm": ">=9.15.9 <10"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "verify:boundaries": "tsx scripts/verify-boundaries.ts",
+    "verify:semgrep": "tsx scripts/verify-semgrep.ts",
+    "db:setup": "tsx scripts/setup-dev-db.ts",
+    "config:check": "node --env-file-if-exists=.env --import tsx src/platform/config/config.cli.ts",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --max-warnings=0",
+      "prettier --write"
+    ],
+    "*.{js,cjs,json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.52",
+    "ajv": "8.20.0",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "19.8.1",
+    "@commitlint/config-conventional": "19.8.1",
+    "@types/node": "22.20.1",
+    "@types/pg": "8.21.0",
+    "eslint": "9.39.5",
+    "eslint-plugin-boundaries": "5.4.0",
+    "husky": "9.1.7",
+    "lint-staged": "15.5.2",
+    "prettier": "3.9.6",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.67.0"
+  }
+}
