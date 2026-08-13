@@ -2,10 +2,10 @@ import { sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import type { TxScope } from '../../../shared/ports/unit-of-work.js';
+import type { TxScope, UnitOfWorkPort } from '../../../shared/ports/unit-of-work.js';
 import { unsafeCompanyId } from '../../../shared/types/ids.js';
 import { TxScopeError, unwrapTxScope } from '../tx-scope.js';
-import { DrizzleUnitOfWork, TenantContextError, tenantBindingStatement } from '../unit-of-work.js';
+import { TenantContextError, tenantBindingStatement } from '../unit-of-work.js';
 
 import { setUpProbeDatabase, type ProbeDatabase } from './support/probe-database.js';
 
@@ -16,24 +16,22 @@ import { setUpProbeDatabase, type ProbeDatabase } from './support/probe-database
  *
  * Also covers 06 §10 items 1, 2 and 9.
  *
- * NOTE FOR PHASE 1 — surfaced by this fixture. `FORCE ROW LEVEL SECURITY`
- * applies to the table owner too, and 06 §2's canonical policy names
- * `TO findneo_app` only. `findneo_migrator` therefore has no applicable policy
- * and is default-denied on every tenant table it owns. Migration 015 (seed)
- * runs as `findneo_migrator` **after** migration 013 enables FORCE, so as
- * currently ordered it cannot write its rows. Needs a decision before Phase 1:
- * seed before 013, grant the migrator an explicit policy, or give it BYPASSRLS.
+ * This fixture surfaced both corrections in D-047: `FORCE ROW LEVEL SECURITY`
+ * applies to the table owner (resolved by BYPASSRLS on the migrator), and a
+ * transaction-local GUC reverts to `''` rather than becoming undefined
+ * (resolved by `nullif` in the canonical policy). It seeds before enabling
+ * RLS, which is the order a fixture wants regardless.
  */
 
 let probe: ProbeDatabase;
-let uow: DrizzleUnitOfWork;
+let uow: UnitOfWorkPort;
 /* If beforeAll fails there is nothing to tear down, and crashing here would
    bury the message explaining why the suite could not start. */
 let started = false;
 
 beforeAll(async () => {
   probe = await setUpProbeDatabase();
-  uow = new DrizzleUnitOfWork(probe.app.db);
+  uow = probe.app.uow;
   started = true;
 });
 
@@ -89,8 +87,10 @@ describe('unset context returns zero rows, not all rows', () => {
   });
 
   it('SEC-003: findneo_app with no context bound sees zero rows', async () => {
-    const result = await probe.app.db.execute<{ count: string }>(
-      sql`select count(*)::text as count from rls_probe`,
+    // Raw pg, deliberately not our Unit of Work: this must prove the policy
+    // holds, not that our own abstraction happens to be written correctly.
+    const result = await probe.appPool.query<{ count: string }>(
+      'select count(*)::text as count from rls_probe',
     );
     expect(result.rows[0]?.count).toBe('0');
   });

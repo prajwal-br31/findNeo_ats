@@ -76,6 +76,11 @@ rules:
       exclude:
         - '**/src/platform/**'
         - '**/scripts/**'
+        # Test infrastructure connects to PostgreSQL directly and must: the
+        # harness creates and drops databases, and 11 §4 wants raw unfiltered
+        # queries that do not go through our own abstraction.
+        - '**/src/testing/**'
+        - '**/__tests__/**'
     # SCOPE. This rule covers exactly what 05a §9 rule 3 names — pg-boss, S3,
     # SMTP and the cache — plus `pg`, whose pool belongs in platform/db.
     #

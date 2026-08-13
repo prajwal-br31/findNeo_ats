@@ -18,6 +18,7 @@
     "test": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run",
     "test:watch": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
+    "db:migrate:test": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts --test",
     "verify:boundaries": "tsx scripts/verify-boundaries.ts",
     "verify:semgrep": "tsx scripts/verify-semgrep.ts",
     "db:setup": "tsx scripts/setup-dev-db.ts",

@@ -33,6 +33,20 @@ Deliberately not the classic pyramid. Most logic here is inseparable from the da
 
 ## 2. Harness
 
+### The test-runner role
+
+Template cloning requires `CREATEDB`. `findneo_migrator` is deliberately `NOCREATEDB` — the role that runs production migrations must not be able to mint databases, and unlike `BYPASSRLS` (D-047b) this is not something an owner can grant itself.
+
+A fourth role, **`findneo_test_runner`**, holds `CREATEDB` and exists **only in development and CI provisioning**. It creates the per-test database; `findneo_migrator` still owns it:
+
+```sql
+CREATE DATABASE findneo_test_abc TEMPLATE findneo_template OWNER findneo_migrator;
+```
+
+**Isolation suite assertion:** `findneo_test_runner` must not exist in a production provisioning path, and no production role holds `CREATEDB` — asserted against `pg_roles`, same shape as the `BYPASSRLS` check (SEC-003a).
+
+**Rejected: transaction-rollback isolation.** Faster and needing no privilege change, but the concurrency tests commit — and those are the tests that have already caught two real defects. A harness that cannot test committed state cannot test the things most worth testing here.
+
 **One container per suite file, template-restored per test.** Migrating a fresh database per test is far too slow; truncating between tests leaves sequence and trigger state behind.
 
 ```
@@ -42,7 +56,10 @@ beforeEach  → CREATE DATABASE … TEMPLATE findneo_template  (fast)
 afterEach   → drop
 ```
 
-**Tenant fixtures.** Every suite gets two unrelated companies by default:
+**Tenant fixtures.** Every suite gets two unrelated companies by default.
+
+**`seedTwoTenants` must throw until the tables exist.** Its signature lands with the harness; its body lands with Phase 1's migrations. Until then it raises explicitly. It must **never** return empty objects — a fixture that silently seeds nothing makes every leak test pass vacuously, because alpha cannot see beta's data when beta has no data. A green suite that proves nothing is worse than a red one.
+
 
 ```ts
 const { alpha, beta } = await seedTwoTenants();
@@ -123,6 +140,24 @@ it('BR-058: simultaneous submissions cannot both pass the cap', async () => {
 These catch the check-then-act races that single-threaded tests never will, and they are the reason BR-058 requires a row lock rather than a count.
 
 ---
+
+## 3a. Control-integrity assertions
+
+A distinct class of test, whose job is proving a **control is still active** — not that behaviour is correct.
+
+Two defects in Phase 0 had the same shape: a configuration change that looked equivalent and silently disabled a control, invisible to every behavioural test, caught only because something asserted the control was still live.
+
+| Change | What it silently disabled |
+|---|---|
+| `mode` → `partialMatch` in the boundaries config | Layer classification, so violations passed as clean |
+| Missing `BYPASSRLS` assertion | Whether the app role could cross tenants at all |
+
+**Properties of a control-integrity assertion:**
+- It asserts against the mechanism, not the outcome — `pg_roles`, `pg_class.relforcerowsecurity`, the resolved lint config, the registered route table.
+- It fails when a control is *removed*, even if all behaviour still looks correct.
+- It uses a **deliberately planted violation** where possible: prove the rule fires, rather than observing that nothing fired.
+
+These currently live scattered across two test files and two `verify:` scripts. **Consolidate them into the deploy-gating isolation suite at T-015** — one home, one gate, one place to check that the controls guarding this architecture are still switched on.
 
 ## 4. The isolation suite
 

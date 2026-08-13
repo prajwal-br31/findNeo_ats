@@ -3,7 +3,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import type { UnitOfWorkPort, TxScope } from '../../shared/ports/unit-of-work.js';
 import type { CompanyId } from '../../shared/types/ids.js';
 
-import type { AppDatabase, TxClient } from './client.js';
+import { createDatabase, type AppDatabase, type DatabaseOptions, type TxClient } from './client.js';
 import { createTxScope, revokeTxScope } from './tx-scope.js';
 
 /**
@@ -67,6 +67,28 @@ async function assertNoTenantBound(tx: TxClient): Promise<void> {
         'something bound it outside the Unit of Work, or used SET without LOCAL',
     );
   }
+}
+
+export interface UnitOfWorkHandle {
+  readonly uow: UnitOfWorkPort;
+  close(): Promise<void>;
+}
+
+/**
+ * The only way to obtain a Unit of Work — and therefore the only way anything
+ * outside `platform/db` reaches the database at all.
+ *
+ * `client.ts` is behind the entry-point restriction (D-044), so bootstrap and
+ * the test harness compose through here rather than building a pool and a
+ * `DrizzleUnitOfWork` separately. That keeps the restriction absolute instead
+ * of carving out an exemption for the composition root.
+ */
+export function createUnitOfWork(options: DatabaseOptions): UnitOfWorkHandle {
+  const handle = createDatabase(options);
+  return {
+    uow: new DrizzleUnitOfWork(handle.db),
+    close: handle.close.bind(handle),
+  };
 }
 
 export class DrizzleUnitOfWork implements UnitOfWorkPort {

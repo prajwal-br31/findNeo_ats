@@ -1,0 +1,208 @@
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { Client } from 'pg';
+
+import { assertTestDatabaseName } from '../../platform/config/database-url.js';
+
+/**
+ * T-011 — template-database restore (11 §2, D-048a).
+ *
+ *   once per run   build `findneo_template_test`: clone the prepared base,
+ *                  apply migrations as the owner
+ *   per test       CREATE DATABASE … TEMPLATE … OWNER findneo_migrator
+ *   after test     DROP, by the owner
+ *
+ * Three roles, because no one role may hold all three capabilities:
+ *   findneo_test_runner  CREATEDB — creates databases; dev and CI only
+ *   findneo_migrator     owns and migrates them, and so may drop them
+ *   findneo_app          what assertions run as; owns nothing, so FORCE bites
+ *
+ * `findneo_test_runner` cannot drop what it creates, because the clones are
+ * owned by the migrator. That is not an oversight — DROP DATABASE requires
+ * ownership, so the capability stays split.
+ *
+ * Every database name this module creates or drops ends in `_test` and is
+ * checked before the statement runs (D-046). The harness drops databases; a
+ * name that slipped past the guard would take real work with it.
+ */
+
+const TEMPLATE_DATABASE = 'findneo_template_test';
+const MAINTENANCE_DATABASE = 'postgres';
+const MIGRATIONS_FOLDER = 'drizzle';
+
+export class HarnessError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HarnessError';
+  }
+}
+
+function requireUrl(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value === '') {
+    throw new HarnessError(
+      `${name} is required to run database tests, and is written to .env by \`pnpm db:setup\`. ` +
+        'If .env predates D-048a it has no DATABASE_URL_TEST_RUNNER and no findneo_test_runner ' +
+        'role exists: re-provision with `pnpm db:setup --force` (this rotates the role passwords).',
+    );
+  }
+  return value;
+}
+
+/** Same credentials, different database. */
+function withDatabase(url: string, database: string): string {
+  const parsed = new URL(url);
+  parsed.pathname = `/${database}`;
+  return parsed.toString();
+}
+
+async function withClient<T>(url: string, fn: (client: Client) => Promise<T>): Promise<T> {
+  const client = new Client({ connectionString: url });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Fixed-arity builders, one literal each — the same shape as
+ * `scripts/setup-dev-db.ts`, and for the same two reasons: `format()` takes
+ * `VARIADIC "any"` so the parameters need explicit casts, and assembling the
+ * placeholder list by interpolation would itself be SQL built by
+ * concatenation (ER-031).
+ */
+const FORMAT_QUERIES = [
+  'SELECT format($1) AS sql',
+  'SELECT format($1, $2::text) AS sql',
+  'SELECT format($1, $2::text, $3::text) AS sql',
+  'SELECT format($1, $2::text, $3::text, $4::text) AS sql',
+] as const;
+
+/**
+ * `CREATE DATABASE` and `DROP DATABASE` take no bind parameters and cannot run
+ * inside a transaction, so PostgreSQL quotes the identifiers itself via `%I`.
+ * Callers must have passed the `_test` guard first.
+ */
+async function execDatabaseStatement(
+  client: Client,
+  template: string,
+  params: readonly string[],
+): Promise<void> {
+  const builder = FORMAT_QUERIES[params.length];
+  if (builder === undefined) {
+    throw new HarnessError(`unsupported parameter count ${String(params.length)}`);
+  }
+  const built = await client.query<{ sql: string }>(builder, [template, ...params]);
+  const sql = built.rows[0]?.sql;
+  if (sql === undefined) throw new HarnessError('format() returned no statement');
+  await client.query(sql);
+}
+
+/** Terminates other sessions; CREATE/DROP require the database to be idle. */
+async function disconnectEveryoneFrom(client: Client, database: string): Promise<void> {
+  await client.query(
+    'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()',
+    [database],
+  );
+}
+
+async function dropDatabase(ownerAdminUrl: string, database: string): Promise<void> {
+  assertTestDatabaseName(withDatabase(ownerAdminUrl, database), `drop ${database}`);
+  await withClient(ownerAdminUrl, async (client) => {
+    await disconnectEveryoneFrom(client, database);
+    await execDatabaseStatement(client, 'DROP DATABASE IF EXISTS %I', [database]);
+  });
+}
+
+/**
+ * Builds the template once per run.
+ *
+ * Cloned from the prepared base rather than from `template1`, because `citext`
+ * and the schema grants were installed there by `pnpm db:setup` under a
+ * superuser — privileges the migrator deliberately lacks. Migration 001's
+ * extension block is then a no-op, which is exactly what its guard is for.
+ */
+export async function buildTemplateDatabase(): Promise<void> {
+  const runnerUrl = requireUrl('DATABASE_URL_TEST_RUNNER');
+  const ownerUrl = requireUrl('DATABASE_URL_TEST_OWNER');
+  const baseDatabase = new URL(ownerUrl).pathname.replace(/^\//, '');
+
+  assertTestDatabaseName(ownerUrl, 'DATABASE_URL_TEST_OWNER');
+  assertTestDatabaseName(withDatabase(ownerUrl, TEMPLATE_DATABASE), 'template database');
+
+  const ownerAdminUrl = withDatabase(ownerUrl, MAINTENANCE_DATABASE);
+  await dropDatabase(ownerAdminUrl, TEMPLATE_DATABASE);
+
+  await withClient(runnerUrl, async (client) => {
+    await disconnectEveryoneFrom(client, baseDatabase);
+    await execDatabaseStatement(client, 'CREATE DATABASE %I TEMPLATE %I OWNER %I', [
+      TEMPLATE_DATABASE,
+      baseDatabase,
+      'findneo_migrator',
+    ]);
+  });
+
+  const templateOwnerUrl = withDatabase(ownerUrl, TEMPLATE_DATABASE);
+  await withClient(templateOwnerUrl, async (client) => {
+    await migrate(drizzle(client), { migrationsFolder: MIGRATIONS_FOLDER });
+  });
+}
+
+export interface TestDatabase {
+  readonly name: string;
+  /** Connect as `findneo_app` — owns nothing, so RLS applies. */
+  readonly appUrl: string;
+  /** Connect as `findneo_migrator` — owner, for fixtures and assertions. */
+  readonly ownerUrl: string;
+  drop(): Promise<void>;
+}
+
+let cloneCounter = 0;
+
+/**
+ * One database per test, cloned from the template.
+ *
+ * The name always ends in `_test`, so the guard that protects the development
+ * database also protects every clone this creates and drops.
+ */
+export async function createTestDatabase(): Promise<TestDatabase> {
+  const runnerUrl = requireUrl('DATABASE_URL_TEST_RUNNER');
+  const ownerUrl = requireUrl('DATABASE_URL_TEST_OWNER');
+  const appUrl = requireUrl('DATABASE_URL_TEST');
+
+  cloneCounter += 1;
+  const suffix = `${String(process.pid)}_${String(cloneCounter)}`;
+  const name = `findneo_c${suffix}_test`;
+  assertTestDatabaseName(withDatabase(ownerUrl, name), 'clone database');
+
+  const ownerAdminUrl = withDatabase(ownerUrl, MAINTENANCE_DATABASE);
+
+  await withClient(runnerUrl, async (client) => {
+    await disconnectEveryoneFrom(client, TEMPLATE_DATABASE);
+    await execDatabaseStatement(client, 'CREATE DATABASE %I TEMPLATE %I OWNER %I', [
+      name,
+      TEMPLATE_DATABASE,
+      'findneo_migrator',
+    ]);
+  });
+
+  /* A clone does not inherit the source database's own ACL — only its
+     contents — so CONNECT is re-granted here. Table grants came with the copy. */
+  await withClient(withDatabase(ownerUrl, name), async (client) => {
+    await execDatabaseStatement(client, 'REVOKE ALL ON DATABASE %I FROM PUBLIC', [name]);
+    for (const role of ['findneo_app', 'findneo_public', 'findneo_platform']) {
+      await execDatabaseStatement(client, 'GRANT CONNECT ON DATABASE %I TO %I', [name, role]);
+    }
+  });
+
+  return {
+    name,
+    appUrl: withDatabase(appUrl, name),
+    ownerUrl: withDatabase(ownerUrl, name),
+    drop: async (): Promise<void> => {
+      await dropDatabase(ownerAdminUrl, name);
+    },
+  };
+}

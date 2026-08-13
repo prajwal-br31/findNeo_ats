@@ -34,13 +34,14 @@ The split is roughly 20/80. Opus for anything where a subtle mistake is a securi
 | T-008 | Five port interfaces + v1 implementations | Sonnet |
 | T-009 | `shared/errors`: `AppError` hierarchy, RFC 7807 mapper, error catalog | Sonnet |
 | T-010 | `shared/http`: envelope, cursor pagination, idempotency middleware | **Opus** |
-| T-011 | Testcontainers harness, template-database restore, two-tenant fixture | **Opus** |
+| T-011 | Test harness: `findneo_test_runner` role, test-DB migration path, template build, clone per test, pool discipline. **Fixture body deferred to T-020a** (D-048) | **Opus** |
 | T-012 | Fastify bootstrap: helmet, cors, cookie, rate-limit, swagger, under-pressure | Sonnet |
 | T-013 | Worker bootstrap: six domains, per-domain policy config, tenant binding, retry, dead-letter | **Opus** |
 | T-013a | **Tenant-fairness claim query in `QueuePort`** (D-040) | **Opus** |
 | T-013b | BFF module skeleton, `/bff/web/*` namespace, session adaptation | Sonnet |
 | T-014 | Pino with PII redaction paths, OpenTelemetry, `/health/live` + `/health/ready` | Sonnet |
 | T-015 | CI pipeline per `11` §9 | Sonnet |
+| T-015a | **Consolidate control-integrity assertions** into one deploy-gating suite (`11` §3a) | **Opus** |
 
 **Gate — none of this is optional:**
 - [ ] T-007 proves: unset context returns **zero** rows, not all rows
@@ -64,6 +65,7 @@ Migrations 001–015. Spec: `06-data-model.md`, `08-lld-identity.md`, `04-permis
 |---|---|---|
 | T-020 | Migrations 001–009 (companies → audit) | Sonnet |
 | T-021 | **Migration 013: RLS enable, force, policies** | **Opus** |
+| T-020a | **`seedTwoTenants` body** — two companies, departments, users across every role (D-048b) | **Opus** |
 | T-022 | Migration 015: seed permissions, roles, defaults | Sonnet |
 | T-023 | Schema assertion test: every `company_id` table has RLS forced | **Opus** |
 | T-024 | Signup: company + owner + verification, one transaction | **Opus** |

@@ -59,6 +59,7 @@ When any other document, prior chat transcript, or session extraction disagrees 
 | D-045 | Version policy: dev tooling tracks current, runtime stays conservative | Accepted |
 | D-046 | Local development and tests run against native PostgreSQL, not Testcontainers | Accepted |
 | D-047 | RLS policy uses `nullif` on the tenant GUC; migrator holds BYPASSRLS | Accepted |
+| D-048 | Test-only `findneo_test_runner` role holds CREATEDB; T-011 splits | Accepted |
 
 ---
 
@@ -589,6 +590,24 @@ Without it, an untenanted query on a warm pool is a 500 rather than zero rows. I
 **Rejected alternatives:** moving seeds before migration 013 (fragile — every future data migration hits the same wall); per-table migrator policies (BYPASSRLS with more surface to get wrong).
 
 **Compensating assertions, required in the isolation suite:** `findneo_app` and `findneo_public` do not hold `BYPASSRLS`, asserted against `pg_roles`; every `company_id` table has RLS enabled and forced; no application config schema can hold the migrator connection string.
+
+---
+
+### D-048 — Test harness privileges and scope
+**Accepted.**
+
+**(a) A fourth, test-only role.** Template cloning needs `CREATEDB`. `findneo_migrator` is `NOCREATEDB` by design, and unlike `BYPASSRLS` (D-047b) this is **not** self-grantable by an owner — so that decision's reasoning does not transfer.
+
+`findneo_test_runner` holds `CREATEDB` and exists only in development and CI provisioning. It creates per-test databases; `findneo_migrator` still owns them. Production role definitions are untouched, and the isolation suite asserts no production role holds `CREATEDB`.
+
+**Rejected: transaction-rollback isolation.** Faster and privilege-free, but the concurrency tests commit — and those tests have already caught two real defects. A harness that cannot test committed state cannot test what most needs testing.
+
+**(b) T-011 splits.** The tables `seedTwoTenants` needs do not exist until Phase 1 migrations 002–012.
+
+- **T-011 (Phase 0):** harness machinery — migrate the test database, build the template, clone per test, connection-pool discipline. Provable against the `rls_probe` fixture.
+- **T-020a (Phase 1):** the `seedTwoTenants` body, landing with the tables.
+
+`seedTwoTenants` **throws** until then. It must never return empty objects: a fixture that seeds nothing makes every leak test pass vacuously, because alpha cannot see beta's data when beta has none. Declaring the gap is correct; a green suite that proves nothing is not.
 
 ---
 

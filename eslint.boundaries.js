@@ -21,6 +21,11 @@ import boundaries from 'eslint-plugin-boundaries';
  * `module-support`, because both are narrower cases of the pattern below them.
  */
 const ELEMENTS = [
+  /* Test code, matched first so it wins over the production element it sits
+     inside. Tests may import anything; nothing production may import them. */
+  { type: 'test', pattern: 'src/**/__tests__', mode: 'folder' },
+  { type: 'testing', pattern: 'src/testing', mode: 'folder' },
+
   { type: 'bootstrap', pattern: 'src/bootstrap', mode: 'folder' },
   { type: 'bff', pattern: 'src/bff/*', mode: 'folder', capture: ['client'] },
 
@@ -80,6 +85,12 @@ const HTTP_PACKAGES = ['fastify', '@fastify/*'];
 const ELEMENT_TYPE_RULES = [
   /* The composition root wires everything together; that is its whole job. */
   { from: ['bootstrap'], allow: ['*'] },
+
+  /* Tests and the harness reach across every layer by nature — a leak test
+     must read as one tenant and assert against another's rows. Note the
+     converse is NOT granted anywhere: no production element lists `test` or
+     `testing`, so shipping code cannot import a fixture. */
+  { from: ['test', 'testing'], allow: ['*'] },
 
   {
     from: ['bff'],

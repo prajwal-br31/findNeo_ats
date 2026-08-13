@@ -35,11 +35,20 @@ interface RoleRow {
   rolname: string;
   rolbypassrls: boolean;
   rolsuper: boolean;
+  rolcreatedb: boolean;
 }
+
+/** Roles that exist in a production cluster. The test runner does not. */
+const PRODUCTION_ROLES = [
+  'findneo_migrator',
+  'findneo_app',
+  'findneo_public',
+  'findneo_platform',
+] as const;
 
 async function readRole(name: string): Promise<RoleRow | undefined> {
   const result = await ownerPool.query<RoleRow>(
-    'SELECT rolname, rolbypassrls, rolsuper FROM pg_roles WHERE rolname = $1',
+    'SELECT rolname, rolbypassrls, rolsuper, rolcreatedb FROM pg_roles WHERE rolname = $1',
     [name],
   );
   return result.rows[0];
@@ -60,13 +69,28 @@ describe('SEC-003a: only the migrator may bypass RLS', () => {
     },
   );
 
-  it.each(['findneo_migrator', 'findneo_app', 'findneo_public', 'findneo_platform'])(
-    '%s is not a superuser (06 §2)',
-    async (name) => {
-      const role = await readRole(name);
-      expect(role?.rolsuper).toBe(false);
-    },
-  );
+  it.each(PRODUCTION_ROLES)('%s is not a superuser (06 §2)', async (name) => {
+    const role = await readRole(name);
+    expect(role?.rolsuper).toBe(false);
+  });
+});
+
+describe('D-048a: only the test runner may create databases', () => {
+  it.each(PRODUCTION_ROLES)('%s does NOT hold CREATEDB', async (name) => {
+    /* Same shape as the BYPASSRLS check, but the reasoning does not transfer:
+       an owner can grant itself BYPASSRLS by disabling FORCE, and cannot grant
+       itself CREATEDB. So this one is a real capability boundary. */
+    const role = await readRole(name);
+    expect(role, `role ${name} is missing entirely`).toBeDefined();
+    expect(role?.rolcreatedb).toBe(false);
+  });
+
+  it('findneo_test_runner holds CREATEDB and nothing else', async () => {
+    const role = await readRole('findneo_test_runner');
+    expect(role?.rolcreatedb).toBe(true);
+    expect(role?.rolbypassrls).toBe(false);
+    expect(role?.rolsuper).toBe(false);
+  });
 });
 
 describe('SEC-003a: migrator credentials cannot reach a serving process', () => {

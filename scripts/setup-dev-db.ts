@@ -44,9 +44,24 @@ const MIGRATOR_ROLE = 'findneo_migrator';
 /** The three traffic roles, named in 06 §2. None owns anything. */
 const TRAFFIC_ROLES = ['findneo_app', 'findneo_public', 'findneo_platform'] as const;
 
-type RoleName = typeof MIGRATOR_ROLE | (typeof TRAFFIC_ROLES)[number];
+/**
+ * Test provisioning only (D-048a, 11 §2). Holds CREATEDB so the harness can
+ * clone a template database per test. `findneo_migrator` is NOCREATEDB by
+ * design and — unlike BYPASSRLS, which an owner can grant itself — CREATEDB is
+ * not self-grantable, so that exemption does not transfer.
+ *
+ * This role must never exist in a production provisioning path. The isolation
+ * suite asserts no production role holds CREATEDB.
+ */
+const TEST_RUNNER_ROLE = 'findneo_test_runner';
 
+type RoleName = typeof MIGRATOR_ROLE | typeof TEST_RUNNER_ROLE | (typeof TRAFFIC_ROLES)[number];
+
+/** Roles that exist in every environment. */
 const ALL_ROLES: readonly RoleName[] = [MIGRATOR_ROLE, ...TRAFFIC_ROLES];
+
+/** Everything the local development cluster needs, tests included. */
+const PROVISIONED_ROLES: readonly RoleName[] = [...ALL_ROLES, TEST_RUNNER_ROLE];
 
 function generateSecret(bytes: number): string {
   // base64url: [A-Za-z0-9_-] only, so it needs no escaping inside a URL.
@@ -146,11 +161,23 @@ async function assertServerVersion(client: Client): Promise<void> {
 }
 
 /**
+ * Exactly one capability each, and the isolation suite asserts every one of
+ * these against `pg_roles` rather than trusting this function.
+ *
+ *   migrator    BYPASSRLS  — owner is subject to FORCE; seeds would be denied (D-047b)
+ *   test runner CREATEDB   — clones a template per test; dev and CI only (D-048a)
+ *   traffic     neither
+ */
+function roleAttributes(role: RoleName): string {
+  const base = 'LOGIN NOSUPERUSER NOCREATEROLE NOINHERIT';
+  if (role === MIGRATOR_ROLE) return `${base} NOCREATEDB BYPASSRLS`;
+  if (role === TEST_RUNNER_ROLE) return `${base} CREATEDB NOBYPASSRLS`;
+  return `${base} NOCREATEDB NOBYPASSRLS`;
+}
+
+/**
  * Creates the role if absent and applies its attributes. Never touches the
  * password, so this is safe to re-run against a live `.env` (`--roles-only`).
- *
- * Only the migrator gets BYPASSRLS (D-047b, SEC-003a). The traffic roles must
- * not have it, and the isolation suite asserts that against `pg_roles`.
  */
 async function ensureRole(client: Client, role: RoleName, rolesOnly = false): Promise<void> {
   const existing = await client.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [role]);
@@ -162,10 +189,7 @@ async function ensureRole(client: Client, role: RoleName, rolesOnly = false): Pr
         'Run without --roles-only for a first-time setup.',
     );
   }
-  const attributes =
-    role === MIGRATOR_ROLE
-      ? 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS'
-      : 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS';
+  const attributes = roleAttributes(role);
   await execFormatted(
     client,
     `${creating ? 'CREATE' : 'ALTER'} ROLE ${role}`,
@@ -263,6 +287,28 @@ function buildUrl(role: RoleName, password: string, database: string): string {
   return `postgres://${role}:${password}@${host}:${port}/${database}`;
 }
 
+/**
+ * The three test connections (D-046, D-048a). No one role may hold all three
+ * capabilities the harness needs, so there are three URLs rather than one.
+ */
+function testConnections(passwords: ReadonlyMap<RoleName, string>): string {
+  const app = buildUrl('findneo_app', passwords.get('findneo_app') ?? '', TEST_DATABASE);
+  const owner = buildUrl(MIGRATOR_ROLE, passwords.get(MIGRATOR_ROLE) ?? '', TEST_DATABASE);
+  const runner = buildUrl(TEST_RUNNER_ROLE, passwords.get(TEST_RUNNER_ROLE) ?? '', 'postgres');
+  return `# Tests run against native PostgreSQL (D-046); there is no container runtime on
+# this machine. Three connections, because no one role may hold all three
+# capabilities the harness needs:
+#   app      owns nothing, so FORCE ROW LEVEL SECURITY genuinely applies to it
+#   owner    migrates, seeds fixtures, and proves seeded rows exist
+#   runner   holds CREATEDB, and is the only role that can clone the template
+#            per test (D-048a). findneo_migrator is NOCREATEDB by design.
+# Every database the harness creates or drops must end in "_test", checked
+# before any DDL runs.
+DATABASE_URL_TEST=${app}
+DATABASE_URL_TEST_OWNER=${owner}
+DATABASE_URL_TEST_RUNNER=${runner}`;
+}
+
 function renderEnvFile(passwords: ReadonlyMap<RoleName, string>): string {
   const appPassword = passwords.get('findneo_app') ?? '';
   const migratorPassword = passwords.get(MIGRATOR_ROLE) ?? '';
@@ -285,12 +331,7 @@ OPS_PORT=9464
 DATABASE_URL=${buildUrl('findneo_app', appPassword, DEV_DATABASE)}
 DATABASE_POOL_MAX=10
 
-# Tests use Testcontainers by default. Uncomment BOTH to run against the native
-# ${TEST_DATABASE} database instead — the loader refuses any test database
-# whose name does not end in "_test". The owner connection creates fixtures and
-# proves seeded rows exist; the app connection is what RLS assertions run as.
-# DATABASE_URL_TEST=${buildUrl('findneo_app', appPassword, TEST_DATABASE)}
-# DATABASE_URL_TEST_OWNER=${buildUrl(MIGRATOR_ROLE, migratorPassword, TEST_DATABASE)}
+${testConnections(passwords)}
 
 # Migration tooling only. The application config loader deliberately does NOT
 # read this — the API and worker must never hold table-owner credentials.
@@ -331,14 +372,14 @@ async function main(): Promise<void> {
   }
 
   const passwords = new Map<RoleName, string>(
-    ALL_ROLES.map((role): [RoleName, string] => [role, generateSecret(24)]),
+    PROVISIONED_ROLES.map((role): [RoleName, string] => [role, generateSecret(24)]),
   );
 
   const admin = await connect(process.env['PGDATABASE'] ?? 'postgres');
   try {
     await assertServerVersion(admin);
     process.stdout.write('PostgreSQL 18 confirmed.\n\n');
-    for (const role of ALL_ROLES) {
+    for (const role of PROVISIONED_ROLES) {
       await ensureRole(admin, role, rolesOnly);
       if (!rolesOnly) await setRolePassword(admin, role, passwords.get(role) ?? '');
     }

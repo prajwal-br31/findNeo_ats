@@ -1,8 +1,7 @@
-import { sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 
 import { assertTestDatabaseName } from '../../../config/database-url.js';
-import { createDatabase, type DatabaseHandle } from '../../client.js';
+import { createUnitOfWork, type UnitOfWorkHandle } from '../../unit-of-work.js';
 
 /**
  * The RLS probe fixture.
@@ -30,8 +29,15 @@ import { createDatabase, type DatabaseHandle } from '../../client.js';
 export const PROBE_TABLE = 'rls_probe';
 
 export interface ProbeDatabase {
-  /** Connected as `findneo_app` — subject to RLS. */
-  readonly app: DatabaseHandle;
+  /** The Unit of Work under test, bound to `findneo_app`. */
+  readonly app: UnitOfWorkHandle;
+  /**
+   * A raw `pg` pool as `findneo_app`, for assertions that must not go through
+   * our own abstraction. 11 §4 uses a raw unfiltered SELECT deliberately for
+   * the public-role test: it proves the policy holds, not that one query
+   * happened to be written correctly. Same reasoning here.
+   */
+  readonly appPool: Pool;
   /** Connected as the table owner — used only to set up and to prove seeding. */
   readonly ownerPool: Pool;
   readonly alpha: string;
@@ -125,26 +131,21 @@ export async function setUpProbeDatabase(): Promise<ProbeDatabase> {
 
   /* Pool deliberately smaller than the concurrency the tests drive, so
      connections are reused. Reuse is what surfaces a context leak. */
-  const app = createDatabase({ url: appUrl, poolMax: 2, applicationName: 'findneo-test-app' });
+  const app = createUnitOfWork({ url: appUrl, poolMax: 2, applicationName: 'findneo-test-app' });
+  const appPool = new Pool({ connectionString: appUrl, max: 2 });
 
   return {
     app,
+    appPool,
     ownerPool,
     alpha,
     beta,
     seededCount,
     teardown: async (): Promise<void> => {
       await app.close();
+      await appPool.end();
       await ownerPool.query('DROP TABLE IF EXISTS rls_probe');
       await ownerPool.end();
     },
   };
-}
-
-/** Row count visible to `findneo_app` under whatever context is bound. */
-export async function visibleRowCount(handle: DatabaseHandle): Promise<number> {
-  const result = await handle.db.execute<{ count: string }>(
-    sql`select count(*)::text as count from rls_probe`,
-  );
-  return Number.parseInt(result.rows[0]?.count ?? '-1', 10);
 }

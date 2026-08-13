@@ -73,6 +73,11 @@ const EXPECTED_VIOLATIONS: readonly ExpectedViolation[] = [
     why: 'ER-004 — application layer imports an HTTP type',
   },
   {
+    file: 'modules/example/application/bad-imports-test-harness.ts',
+    rule: 'boundaries/element-types',
+    why: 'production code importing test infrastructure',
+  },
+  {
     file: 'modules/example/infrastructure/bad-imports-db-client.ts',
     rule: 'boundaries/entry-point',
     why: "D-044 — reaching past platform/db's entry point to the raw client",
@@ -86,6 +91,7 @@ const CONTROLS: readonly string[] = [
   'modules/other/application/good-cross-module-service.ts',
   'modules/example/application/good-imports-uow-port.ts',
   'modules/example/infrastructure/good-imports-tx-scope.ts',
+  'modules/example/__tests__/good-test-imports-anything.ts',
 ];
 
 function toFixtureRelativePath(absolutePath: string): string {
