@@ -25,7 +25,12 @@ rules:
               - pattern: $C.unsafe($SQL, ...)
           - metavariable-regex:
               metavariable: $SQL
-              regex: .*\$\{.*
+              # Excludes Drizzle's `sql` tag, which is the PARAMETERISING
+              # idiom: sql`… ${value} …` compiles to a bind parameter, and
+              # ER-008 puts exactly that in every repository. Flagging it would
+              # train people to suppress this rule, which is how a real
+              # injection rule dies. `sql.raw()` stays caught, separately.
+              regex: ^(?!sql`)[\s\S]*\$\{
       - pattern: sql.raw(...)
       - pattern: $C.query($A + $B, ...)
       - pattern: $C.execute($A + $B, ...)

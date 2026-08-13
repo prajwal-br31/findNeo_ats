@@ -90,6 +90,7 @@ const EXPECTED: ReadonlyArray<{ file: string; rule: string; why: string }> = [
 const CONTROLS: readonly string[] = [
   'src/modules/example/infrastructure/control-parameterised.ts',
   'src/modules/example/infrastructure/control-repository-uses-drizzle.ts',
+  'src/modules/example/infrastructure/control-drizzle-sql-tag.ts',
   'src/platform/db/control-platform-may-import-pg.ts',
   'src/modules/example/control-explicit-mapper.mapper.ts',
   'src/modules/example/application/control-safe-comparisons.ts',

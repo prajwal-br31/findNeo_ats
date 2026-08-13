@@ -13,17 +13,23 @@
 
 -- citext: case-insensitive email comparison without lower() on every query,
 -- enforced by the column type rather than by remembering (06 §1).
+-- pg_trgm backs fuzzy candidate duplicate detection (T-062).
 DO $$
+DECLARE
+  ext text;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'citext') THEN
-    BEGIN
-      CREATE EXTENSION citext;
-    EXCEPTION WHEN insufficient_privilege THEN
-      RAISE EXCEPTION
-        'citext is required (06 §1) but the current role cannot create it. '
-        'Run: CREATE EXTENSION citext; as a superuser, then re-run migrations.';
-    END;
-  END IF;
+  FOREACH ext IN ARRAY ARRAY['citext', 'pg_trgm']
+  LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = ext) THEN
+      BEGIN
+        EXECUTE format('CREATE EXTENSION %I', ext);
+      EXCEPTION WHEN insufficient_privilege THEN
+        RAISE EXCEPTION
+          '% is required (06 §8) but the current role cannot create it. '
+          'Run: CREATE EXTENSION %I; as a superuser, then re-run migrations.', ext, ext;
+      END;
+    END IF;
+  END LOOP;
 END
 $$;
 --> statement-breakpoint

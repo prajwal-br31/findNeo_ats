@@ -279,13 +279,13 @@ export function boundariesConfig({ rootPath, files }) {
               target: [{ element: { type: 'platform-db' } }],
               disallow: ['*'],
               message:
-                'platform/db exposes only unit-of-work.ts and tx-scope.ts (D-044). ' +
+                'platform/db exposes only its port implementations and the TxScope unwrap (D-044). ' +
                 'The pool and the Drizzle client are deliberately unreachable — obtain a ' +
                 'transaction through UnitOfWorkPort and pass the TxScope down (ER-004a).',
             },
             {
               target: [{ element: { type: 'platform-db' } }],
-              allow: ['unit-of-work.ts', 'tx-scope.ts'],
+              allow: ['unit-of-work.ts', 'tx-scope.ts', 'idempotency-store.ts'],
             },
           ],
         },

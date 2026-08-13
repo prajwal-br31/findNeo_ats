@@ -213,6 +213,31 @@ RFC 7807, extended (D-021).
 
 **`traceId` appears on every error**, including 500, and correlates to logs and traces.
 
+### Field error codes
+
+`fields[].code` is a closed set with a **deterministic mapping from the Ajv keyword that failed**. The mapping is a lookup table, not a heuristic — the same validation failure always produces the same code.
+
+| Code | Ajv keyword(s) | Meaning |
+|---|---|---|
+| `ERR_FIELD_REQUIRED` | `required` | Absent and mandatory |
+| `ERR_FIELD_TYPE` | `type` | Wrong JSON type |
+| `ERR_FIELD_FORMAT` | `format` | Failed a named format — `email`, `date`, `uuid` |
+| `ERR_FIELD_PATTERN` | `pattern` | Failed a regex constraint |
+| `ERR_FIELD_TOO_SHORT` | `minLength`, `minItems` | Below minimum size |
+| `ERR_FIELD_TOO_LONG` | `maxLength`, `maxItems` | Above maximum size |
+| `ERR_FIELD_RANGE` | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` | Outside the permitted numeric range |
+| `ERR_FIELD_ENUM` | `enum`, `const` | Not a permitted value |
+| `ERR_FIELD_NOT_UNIQUE` | `uniqueItems` | Duplicate entries in an array |
+| `ERR_FIELD_UNKNOWN` | `additionalProperties` | Property not in the schema |
+| `ERR_FIELD_IMMUTABLE` | — (pre-validation check) | Server-controlled field present in the body |
+| `ERR_FIELD_CONFLICT` | — (post-validation rule) | Fails a cross-field rule, e.g. `salaryMax < salaryMin` |
+
+**`path` is a JSON Pointer** into the request body — `/title`, `/skills/2/weight`. For `ERR_FIELD_REQUIRED` it points at the **parent object**, since the missing member has no path of its own.
+
+**Any Ajv keyword not in this table maps to `ERR_FIELD_TYPE`** with the message preserved. Silent omission is worse than an imprecise code, and an unmapped keyword should show up in logs rather than vanish.
+
+**`detail` and `message` are human-facing and may be reworded or localised at any time.** Clients branch on `code` only.
+
 ### Error code catalog
 
 Stable identifiers. Adding one is routine; changing the meaning of one is a breaking change.

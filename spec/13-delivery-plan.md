@@ -33,7 +33,7 @@ The split is roughly 20/80. Opus for anything where a subtle mistake is a securi
 | T-007 | **`platform/db`: transaction helper + `set_config` binding** | **Opus** |
 | T-008 | Five port interfaces + v1 implementations | Sonnet |
 | T-009 | `shared/errors`: `AppError` hierarchy, RFC 7807 mapper, error catalog | Sonnet |
-| T-010 | `shared/http`: envelope, cursor pagination, idempotency middleware | **Opus** |
+| T-010 | `shared/http`: envelope, cursor pagination, idempotency middleware. **Includes migration 001b (`idempotency_keys`) so this lands fully tested** | **Opus** |
 | T-011 | Test harness: `findneo_test_runner` role, test-DB migration path, template build, clone per test, pool discipline. **Fixture body deferred to T-020a** (D-048) | **Opus** |
 | T-012 | Fastify bootstrap: helmet, cors, cookie, rate-limit, swagger, under-pressure | Sonnet |
 | T-013 | Worker bootstrap: six domains, per-domain policy config, tenant binding, retry, dead-letter | **Opus** |
@@ -63,7 +63,7 @@ Migrations 001–015. Spec: `06-data-model.md`, `08-lld-identity.md`, `04-permis
 
 | # | Task | Model |
 |---|---|---|
-| T-020 | Migrations 001–009 (companies → audit) | Sonnet |
+| T-020 | Migrations 002–009 (companies → audit). 001 and 001b land in Phase 0 | Sonnet |
 | T-021 | **Migration 013: RLS enable, force, policies** | **Opus** |
 | T-020a | **`seedTwoTenants` body** — two companies, departments, users across every role (D-048b) | **Opus** |
 | T-022 | Migration 015: seed permissions, roles, defaults | Sonnet |

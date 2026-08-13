@@ -661,6 +661,8 @@ The partial index stays small regardless of table size — it only ever contains
 
 Backs the idempotency contract in `07-api-standards.md` §9. Required on every side-effecting POST (ER-040).
 
+**Created in migration 001b, during Phase 0**, not with the migration 009 group. It has no foreign keys and depends on no other table, and the middleware that uses it (T-010) ships in Phase 0 — untested middleware in production is a worse trade than an out-of-sequence migration number.
+
 | Column | Type | Notes |
 |---|---|---|
 | `id` | uuid PK | |
@@ -715,7 +717,8 @@ Partitioned monthly by `created_at` from the first migration — converting a la
 Foreign key dependencies force this sequence:
 
 ```
-001  extensions (citext), database roles, grants
+001  extensions (citext, pg_trgm), database roles, grants
+001b idempotency_keys        ← Phase 0. No foreign keys, depends on nothing
 002  companies                      (owner_user_id FK added in 004)
 003  users, sessions
 004  ALTER companies ADD FK owner_user_id
@@ -723,7 +726,7 @@ Foreign key dependencies force this sequence:
 006  permissions, roles, role_permissions, user_roles
 007  invitations
 008  settings, field_visibility_rules
-009  outbox, audit_logs (partitioned), activity_logs, idempotency_keys
+009  outbox, audit_logs (partitioned), activity_logs
 010  form_templates, form_template_versions, form_template_fields
 011  skills, pipeline_templates, pipeline_template_stages
 012  jobs, job_skills, job_hiring_team, job_pipeline_stages

@@ -8,6 +8,13 @@
       "when": 1786564843463,
       "tag": "0001_extensions_roles_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786612077996,
+      "tag": "0001b_idempotency_keys",
+      "breakpoints": true
     }
   ]
 }
