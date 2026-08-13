@@ -55,11 +55,34 @@ ALTER TABLE <t> FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_isolation ON <t>
   AS PERMISSIVE FOR ALL TO findneo_app
-  USING      (company_id = current_setting('app.current_company_id', true)::uuid)
-  WITH CHECK (company_id = current_setting('app.current_company_id', true)::uuid);
+  USING      (company_id = nullif(current_setting('app.current_company_id', true), '')::uuid)
+  WITH CHECK (company_id = nullif(current_setting('app.current_company_id', true), '')::uuid);
 ```
 
-`FORCE` matters: without it the owning role bypasses every policy. The `true` second argument makes a missing setting return NULL rather than error, and NULL fails the predicate — **unset context returns zero rows, never everything.** That is the correct failure direction and it must be tested (ER-054).
+**The `nullif` is not optional.** A transaction-local GUC does not become undefined when its transaction ends — it reverts to the **empty string**. So `current_setting(…, true)` returns NULL only on a connection that has never bound a tenant, and `''` on every connection that has served one. `''::uuid` raises `invalid input syntax for type uuid` rather than yielding NULL.
+
+Without `nullif`, an untenanted query on a warm pooled connection produces a **500**, not zero rows. It still fails closed — nothing leaks — but it violates SEC-003's requirement that the failure direction be "nothing, never everything", and on a warm pool that is most connections.
+
+This is invisible to any test that uses one connection. The concurrency harness must run **more transactions than the pool has connections**, so bound connections are demonstrably reused.
+
+`FORCE` matters separately: without it the owning role bypasses every policy.
+
+### The migrator and FORCE
+
+`findneo_migrator` owns every table. Under `FORCE`, an owner is subject to policies too — and no policy names the migrator, so it is denied on tables it owns. Migration 015 (seeding the permission catalog, default roles, and default templates) would fail exactly there.
+
+**Resolution:**
+
+```sql
+ALTER ROLE findneo_migrator WITH BYPASSRLS;
+```
+
+**Why this is not a weakening.** The migrator owns the tables, so it can already `ALTER TABLE … NO FORCE ROW LEVEL SECURITY` at will. Withholding `BYPASSRLS` grants nothing it cannot grant itself; it only costs a per-table migrator policy that someone will eventually forget to write. The control that actually matters is that **migrator credentials never reach a serving process** — `DATABASE_URL_MIGRATOR` exists solely for the migration step and the application config loader deliberately does not read it.
+
+**Compensating assertions, required in the isolation suite:**
+- `findneo_app` and `findneo_public` do **not** have `BYPASSRLS` — asserted against `pg_roles`, not assumed.
+- Every table carrying `company_id` has RLS **enabled and forced** (unchanged).
+- The application and worker configuration schemas have no field capable of holding the migrator connection string.
 
 Context is bound once per request, parameterised, inside the transaction (ER-018):
 
@@ -68,6 +91,8 @@ SELECT set_config('app.current_company_id', $1, true);
 ```
 
 **Platform staff rows have `company_id IS NULL` and therefore satisfy no tenant policy** — NULL comparison yields NULL, which fails. Tenant isolation from platform accounts is automatic rather than conditional (D-005).
+
+**Migration ordering note:** migration 013 enables RLS; migration 015 seeds. Seeding runs as `findneo_migrator`, which is why the `BYPASSRLS` grant above must be part of migration 001, not deferred.
 
 ---
 

@@ -53,7 +53,15 @@ $env:PGUSER = 'postgres'; $env:PGPASSWORD = '<your postgres superuser password>'
 
 `PGUSER` is not optional on Windows: `pg` defaults it to your Windows account name rather than to `postgres`, so leaving it unset fails as an unknown role. `PGHOST` and `PGPORT` default to `localhost:5432`.
 
-It is safe to re-run: if `.env` already exists the script refuses and touches nothing. Pass `--force` to regenerate (this rotates the role passwords and rewrites `.env`).
+It is safe to re-run: if `.env` already exists the script refuses and touches nothing.
+
+| Flag           | Effect                                                                           |
+| -------------- | -------------------------------------------------------------------------------- |
+| _(none)_       | First-time setup. Creates roles and databases, generates secrets, writes `.env`  |
+| `--force`      | Regenerates everything, **rotating the role passwords** and rewriting `.env`     |
+| `--roles-only` | Re-applies role attributes and grants. Leaves `.env` and the passwords untouched |
+
+`--roles-only` is for when a spec change alters what a role must hold — as D-047(b) did by requiring `BYPASSRLS` on `findneo_migrator`. It needs the same superuser connection.
 
 What it creates:
 

@@ -58,6 +58,7 @@ When any other document, prior chat transcript, or session extraction disagrees 
 | D-044 | Unit of Work port — transactions without leaking the ORM upward | Accepted |
 | D-045 | Version policy: dev tooling tracks current, runtime stays conservative | Accepted |
 | D-046 | Local development and tests run against native PostgreSQL, not Testcontainers | Accepted |
+| D-047 | RLS policy uses `nullif` on the tenant GUC; migrator holds BYPASSRLS | Accepted |
 
 ---
 
@@ -565,6 +566,29 @@ Docker is not available on the primary development machine. Both the application
 **CI is unaffected** — GitHub Actions provides PostgreSQL as a service container. Testcontainers remains the specified approach for any environment where a container runtime exists; this decision governs the local machine.
 
 **Migration 001 requires a superuser once per fresh install.** `findneo_migrator` is `NOCREATEROLE` by design, and `CREATE EXTENSION citext` is not a trusted extension. Every block in migration 001 is guarded and idempotent, so re-running is a no-op.
+
+---
+
+### D-047 — RLS policy corrections
+**Accepted.** Two corrections to the canonical pattern, both found by executing the Phase 0 concurrency tests against a real pooled connection.
+
+**(a) `nullif` on the tenant GUC.** A transaction-local GUC reverts to the empty string at transaction end, not to undefined. `current_setting(…, true)` therefore returns `''` — not NULL — on any connection that has previously served a tenant, and `''::uuid` raises. The policy predicate is now:
+
+```sql
+company_id = nullif(current_setting('app.current_company_id', true), '')::uuid
+```
+
+Without it, an untenanted query on a warm pool is a 500 rather than zero rows. It fails closed, but SEC-003 permits exactly one failure direction and this was a third.
+
+**Consequence for testing:** the concurrency harness must run more transactions than the pool holds connections. A single-connection test cannot surface this, and it would have stayed invisible until Phase 1 load.
+
+**(b) `findneo_migrator` holds `BYPASSRLS`.** Under `FORCE`, the table owner is subject to policies, and no policy names the migrator — so seeding in migration 015 would be denied on tables it owns.
+
+**Why this is not a weakening:** the migrator owns the tables and can `ALTER TABLE … NO FORCE ROW LEVEL SECURITY` at will. Withholding `BYPASSRLS` grants nothing it cannot grant itself; it only costs a per-table policy someone eventually forgets. The real control is credential separation — `DATABASE_URL_MIGRATOR` is read by nothing that serves traffic.
+
+**Rejected alternatives:** moving seeds before migration 013 (fragile — every future data migration hits the same wall); per-table migrator policies (BYPASSRLS with more surface to get wrong).
+
+**Compensating assertions, required in the isolation suite:** `findneo_app` and `findneo_public` do not hold `BYPASSRLS`, asserted against `pg_roles`; every `company_id` table has RLS enabled and forced; no application config schema can hold the migrator connection string.
 
 ---
 

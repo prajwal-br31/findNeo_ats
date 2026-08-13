@@ -145,19 +145,41 @@ async function assertServerVersion(client: Client): Promise<void> {
   }
 }
 
-async function ensureRole(client: Client, role: RoleName, password: string): Promise<void> {
+/**
+ * Creates the role if absent and applies its attributes. Never touches the
+ * password, so this is safe to re-run against a live `.env` (`--roles-only`).
+ *
+ * Only the migrator gets BYPASSRLS (D-047b, SEC-003a). The traffic roles must
+ * not have it, and the isolation suite asserts that against `pg_roles`.
+ */
+async function ensureRole(client: Client, role: RoleName, rolesOnly = false): Promise<void> {
   const existing = await client.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [role]);
   const creating = existing.rowCount === 0;
-  const template = creating
-    ? 'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L'
-    : 'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L';
-  await execFormatted(client, `${creating ? 'CREATE' : 'ALTER'} ROLE ${role}`, template, [
+  if (creating && rolesOnly) {
+    throw new SetupStepError(
+      `CREATE ROLE ${role}`,
+      '--roles-only cannot create a role: it would have no password and no .env entry. ' +
+        'Run without --roles-only for a first-time setup.',
+    );
+  }
+  const attributes =
+    role === MIGRATOR_ROLE
+      ? 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT BYPASSRLS'
+      : 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS';
+  await execFormatted(
+    client,
+    `${creating ? 'CREATE' : 'ALTER'} ROLE ${role}`,
+    `${creating ? 'CREATE' : 'ALTER'} ROLE %I ${attributes}`,
+    [role],
+  );
+  process.stdout.write(`  role ${role.padEnd(18)} ${creating ? 'created' : 'updated'}\n`);
+}
+
+async function setRolePassword(client: Client, role: RoleName, password: string): Promise<void> {
+  await execFormatted(client, `set password for ${role}`, 'ALTER ROLE %I PASSWORD %L', [
     role,
     password,
   ]);
-  process.stdout.write(
-    `  role ${role.padEnd(18)} ${existing.rowCount === 0 ? 'created' : 'updated'}\n`,
-  );
 }
 
 async function ensureDatabase(client: Client, database: string): Promise<void> {
@@ -291,13 +313,18 @@ OTEL_ENABLED=false
 
 async function main(): Promise<void> {
   const force = process.argv.includes('--force');
+  /* Re-applies role attributes and grants without rotating passwords or
+     rewriting .env — for when a spec change alters what a role must hold, as
+     D-047(b) did by requiring BYPASSRLS on the migrator. */
+  const rolesOnly = process.argv.includes('--roles-only');
 
   // Checked before touching the database, so a refused run changes nothing.
-  if (existsSync(ENV_PATH) && !force) {
+  if (existsSync(ENV_PATH) && !force && !rolesOnly) {
     process.stderr.write(
       '.env already exists. Re-running would rotate the role passwords and\n' +
         'invalidate it. Pass --force to overwrite, after saving anything you\n' +
-        'have customised.\n',
+        'have customised, or --roles-only to re-apply role attributes and\n' +
+        'grants while leaving .env and the passwords untouched.\n',
     );
     process.exitCode = 1;
     return;
@@ -311,13 +338,21 @@ async function main(): Promise<void> {
   try {
     await assertServerVersion(admin);
     process.stdout.write('PostgreSQL 18 confirmed.\n\n');
-    for (const [role, password] of passwords) await ensureRole(admin, role, password);
+    for (const role of ALL_ROLES) {
+      await ensureRole(admin, role, rolesOnly);
+      if (!rolesOnly) await setRolePassword(admin, role, passwords.get(role) ?? '');
+    }
     for (const database of [DEV_DATABASE, TEST_DATABASE]) await ensureDatabase(admin, database);
   } finally {
     await admin.end();
   }
 
   for (const database of [DEV_DATABASE, TEST_DATABASE]) await prepareDatabase(database);
+
+  if (rolesOnly) {
+    process.stdout.write('\nRole attributes and grants re-applied. .env untouched.\n');
+    return;
+  }
 
   writeFileSync(ENV_PATH, renderEnvFile(passwords), { encoding: 'utf8', mode: 0o600 });
   process.stdout.write(

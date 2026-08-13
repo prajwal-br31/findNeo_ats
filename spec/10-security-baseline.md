@@ -52,8 +52,17 @@ Three layers because each fails differently: RLS fails silently on misconfigurat
 ### SEC-002 — `FORCE ROW LEVEL SECURITY` on every tenant table
 Without `FORCE`, the table owner bypasses every policy. The application connects as `findneo_app`, which owns nothing.
 
-### SEC-003 — Unset context yields zero rows
-`current_setting('app.current_company_id', true)` returns NULL when unset; NULL comparison fails the predicate. The failure direction is "nothing", never "everything". Tested explicitly.
+### SEC-003 — Unset context yields zero rows — and never an error
+`nullif(current_setting('app.current_company_id', true), '')` returns NULL when unset **or when reset**; NULL comparison fails the predicate.
+
+The `nullif` is load-bearing. A transaction-local GUC reverts to the **empty string** at transaction end, not to undefined. `''::uuid` raises rather than yielding NULL, which turns an untenanted query on a warm pooled connection into a 500. There are three possible failure directions here — nothing, everything, and error — and only the first is acceptable.
+
+**Test requirement:** the concurrency harness must run more transactions than the connection pool holds, so bound connections are provably reused. A single-connection test cannot surface this class of bug.
+
+### SEC-003a — Only the migrator may bypass RLS
+`findneo_migrator` holds `BYPASSRLS`; it owns the tables and could disable `FORCE` regardless, so this grants nothing new. `findneo_app` and `findneo_public` must **not** hold it — asserted against `pg_roles` in the isolation suite, never assumed.
+
+The control that carries the weight is credential separation: migrator credentials exist only for the migration step, and no application or worker configuration schema has a field capable of holding them.
 
 ### SEC-004 — Tenant binding is parameterised and transaction-local
 ```sql

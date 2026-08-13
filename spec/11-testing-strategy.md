@@ -99,6 +99,16 @@ it('BR-008 (DB): composite FK rejects cross-tenant department attachment', async
 
 A database-enforced rule that only fails in the service is not database-enforced, however the spec describes it.
 
+### Connection-pool reuse is mandatory in concurrency tests
+
+Any test exercising tenant context must run **more transactions than the pool holds connections**, so a bound connection is provably reused by a later transaction. A single-connection test cannot detect GUC-reset behaviour, stale context, or cross-request leakage — the three failures that matter most (D-047).
+
+The harness pool is deliberately small (two connections) so this property is cheap to obtain.
+
+### Migrating the test database
+
+`db:migrate` targets the development database. The harness needs its own path to apply migrations to `findneo_test` as the owner role. This is separate from the template-database restore: migrations build the template once; the restore clones it per test.
+
 ### Per concurrency rule (ER-057)
 
 Every "at most N", "only if none exists", or "first wins" rule gets simultaneous requests:

@@ -58,6 +58,41 @@ END
 $$;
 --> statement-breakpoint
 
+-- D-047(b) / SEC-003a — the migrator bypasses RLS.
+--
+-- Under FORCE, an owner is subject to policies, and no policy names the
+-- migrator: seeding in migration 015 would be denied on tables it owns.
+--
+-- This grants nothing the migrator does not already have. It owns every table
+-- and can ALTER TABLE … NO FORCE ROW LEVEL SECURITY at will; withholding
+-- BYPASSRLS only costs a per-table migrator policy that someone eventually
+-- forgets to write. The control that carries the weight is credential
+-- separation — DATABASE_URL_MIGRATOR is read by nothing that serves traffic,
+-- and the application config schema has no field that can hold it.
+--
+-- findneo_app and findneo_public must never hold this; the isolation suite
+-- asserts that against pg_roles rather than assuming it.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'findneo_migrator') THEN
+    RAISE EXCEPTION
+      'role findneo_migrator does not exist. It owns every table (06 §2) and must be '
+      'created by the installer before migrations run.';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'findneo_migrator' AND rolbypassrls) THEN
+    BEGIN
+      ALTER ROLE findneo_migrator WITH BYPASSRLS;
+    EXCEPTION WHEN insufficient_privilege THEN
+      RAISE EXCEPTION
+        'findneo_migrator requires BYPASSRLS (D-047b) but the current role cannot grant it. '
+        'Run: ALTER ROLE findneo_migrator WITH BYPASSRLS; as a superuser, then re-run migrations.';
+    END;
+  END IF;
+END
+$$;
+--> statement-breakpoint
+
 -- Nothing is granted to PUBLIC. Every privilege below is named explicitly, so
 -- a role can only reach what it was deliberately given.
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
