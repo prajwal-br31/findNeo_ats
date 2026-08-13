@@ -7,7 +7,8 @@ import { createTestDatabase, type TestDatabase } from '../../../testing/harness/
 import { createUnitOfWork, type UnitOfWorkHandle } from '../../db/unit-of-work.js';
 import { installQueueSchema } from '../install.js';
 import { PgBossQueue } from '../pg-boss-queue.js';
-import { QUEUE_POLICIES, deadLetterQueue } from '../queue-policies.js';
+import { QUEUE_POLICIES } from '../queue-policies.js';
+import { deadLetterQueue } from '../queue-routing.js';
 
 /**
  * T-013 — the queue adapter against real pg-boss.

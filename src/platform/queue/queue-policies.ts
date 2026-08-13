@@ -85,8 +85,3 @@ export const QUEUE_POLICIES: Readonly<Record<QueueDomain, QueuePolicy>> = {
     timeoutSeconds: 300,
   },
 };
-
-/** Dead letters go to a per-domain queue, never back onto the live one. */
-export function deadLetterQueue(domain: QueueDomain): string {
-  return `${domain}.dead`;
-}

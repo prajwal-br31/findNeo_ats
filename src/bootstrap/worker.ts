@@ -1,7 +1,8 @@
 import type PgBoss from 'pg-boss';
 
 import type { Config } from '../platform/config/config.types.js';
-import { QUEUE_POLICIES, deadLetterQueue } from '../platform/queue/queue-policies.js';
+import { QUEUE_POLICIES } from '../platform/queue/queue-policies.js';
+import { deadLetterQueue, queueNamesFor } from '../platform/queue/queue-routing.js';
 import type { JobEnvelope } from '../platform/queue/pg-boss-queue.js';
 import { QUEUE_DOMAINS, type QueueDomain, type TenantJobPayload } from '../shared/ports/queue.js';
 import type { TxScope, UnitOfWorkPort } from '../shared/ports/unit-of-work.js';
@@ -29,8 +30,11 @@ import type { TxScope, UnitOfWorkPort } from '../shared/ports/unit-of-work.js';
  *
  *  - **Dispatch.** Envelope in, registered handler out.
  *
- * What it deliberately does not do: tenant fairness. That is the claim query,
- * and it lives in the adapter where no handler can see it (ER-044a, D-040).
+ * Concurrency is **fixed per domain**. Tenant fairness — the per-tenant
+ * in-flight cap — is deferred to T-159a and will land entirely inside
+ * `platform/queue` (ER-044a, D-040). Nothing here will need to change for it,
+ * which is the point of routing through `queueNamesFor` rather than assuming
+ * a domain is a queue.
  */
 
 /** Everything a handler is given. Ids only — the payload is not an entity. */
@@ -130,6 +134,46 @@ function readEnvelope(data: unknown): JobEnvelope {
 }
 
 /**
+ * Runs one claimed batch. Jobs run sequentially: each holds a database
+ * transaction for its duration, and fanning a batch across `concurrency`
+ * connections would let a single domain drain the pool.
+ */
+async function runBatch(
+  context: BatchContext,
+  jobs: PgBoss.JobWithMetadata<unknown>[],
+): Promise<void> {
+  const { domain, handlers, uow, onJobError } = context;
+
+  for (const job of jobs) {
+    const { jobName, payload } = readEnvelope(job.data);
+    const handler = handlers[jobName];
+    if (handler === undefined) throw new UnknownJobError(domain, jobName);
+
+    try {
+      /* ER-043: the same helper the API uses. The handler's writes and the
+         transaction that scopes them to one tenant are the same transaction —
+         there is no window in which it runs unbound. */
+      await uow.withTenant(payload.companyId, (tx) =>
+        handler({ tx, payload, jobId: job.id, attempt: job.retryCount }),
+      );
+    } catch (error) {
+      /* Rethrow so pg-boss applies the domain's retry policy and, once
+         exhausted, moves the job to its dead-letter queue (ER-044). Swallowing
+         here would turn a permanent failure into a silent one. */
+      onJobError?.(domain, jobName, error);
+      throw error;
+    }
+  }
+}
+
+interface BatchContext {
+  readonly domain: QueueDomain;
+  readonly handlers: DomainHandlers;
+  readonly uow: UnitOfWorkPort;
+  readonly onJobError: WorkerOptions['onJobError'];
+}
+
+/**
  * Starts one pool per served domain.
  *
  * Handlers run one job at a time within a batch rather than in parallel: each
@@ -144,34 +188,18 @@ export async function startWorkers(options: WorkerOptions): Promise<WorkerFleet>
     const policy = QUEUE_POLICIES[domain];
     const handlers = registry[domain] ?? {};
 
-    await boss.work(
-      domain,
-      /* `includeMetadata` is what carries `retryCount`, and therefore what
-         lets a handler see it is on a redelivery (ER-041). */
-      { batchSize: policy.concurrency, includeMetadata: true },
-      async (jobs: PgBoss.JobWithMetadata<unknown>[]): Promise<void> => {
-        for (const job of jobs) {
-          const { jobName, payload } = readEnvelope(job.data);
-          const handler = handlers[jobName];
-          if (handler === undefined) throw new UnknownJobError(domain, jobName);
-
-          try {
-            /* ER-043: the same helper the API uses. The handler's writes and
-               the transaction that scopes them to one tenant are the same
-               transaction — there is no window in which it runs unbound. */
-            await uow.withTenant(payload.companyId, (tx) =>
-              handler({ tx, payload, jobId: job.id, attempt: job.retryCount }),
-            );
-          } catch (error) {
-            /* Rethrow so pg-boss applies the domain's retry policy and, once
-               exhausted, moves the job to `${domain}.dead` (ER-044). Swallowing
-               here would turn a permanent failure into a silent one. */
-            onJobError?.(domain, jobName, error);
-            throw error;
-          }
-        }
-      },
-    );
+    /* A domain may be backed by more than one queue. Serving the domain means
+       serving all of them, so this loops rather than assuming a single name. */
+    for (const queueName of queueNamesFor(domain)) {
+      await boss.work(
+        queueName,
+        /* `includeMetadata` is what carries `retryCount`, and therefore what
+           lets a handler see it is on a redelivery (ER-041). */
+        { batchSize: policy.concurrency, includeMetadata: true },
+        (jobs: PgBoss.JobWithMetadata<unknown>[]) =>
+          runBatch({ domain, handlers, uow, onJobError }, jobs),
+      );
+    }
   }
 
   return {

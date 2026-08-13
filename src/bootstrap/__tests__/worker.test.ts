@@ -8,7 +8,7 @@ import { unwrapTxScope } from '../../platform/db/tx-scope.js';
 import { createUnitOfWork, type UnitOfWorkHandle } from '../../platform/db/unit-of-work.js';
 import { installQueueSchema } from '../../platform/queue/install.js';
 import { PgBossQueue } from '../../platform/queue/pg-boss-queue.js';
-import { deadLetterQueue } from '../../platform/queue/queue-policies.js';
+import { deadLetterQueue } from '../../platform/queue/queue-routing.js';
 import { QUEUE_DOMAINS } from '../../shared/ports/queue.js';
 import { unsafeCompanyId } from '../../shared/types/ids.js';
 import { createTestDatabase, type TestDatabase } from '../../testing/harness/test-database.js';

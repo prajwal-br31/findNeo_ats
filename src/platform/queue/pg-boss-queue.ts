@@ -10,7 +10,8 @@ import {
 import type { TxScope } from '../../shared/ports/unit-of-work.js';
 import { unwrapTxConnection } from '../db/tx-scope.js';
 
-import { PRIORITY_VALUES, QUEUE_POLICIES, deadLetterQueue } from './queue-policies.js';
+import { PRIORITY_VALUES, QUEUE_POLICIES } from './queue-policies.js';
+import { deadLetterQueue, queueNameFor, queueNamesFor } from './queue-routing.js';
 
 /**
  * `QueuePort` over pg-boss (D-016, D-039).
@@ -60,8 +61,11 @@ export class PgBossQueue implements QueuePort {
   ): Promise<EnqueuedJob> {
     const policy = QUEUE_POLICIES[domain];
     const envelope: JobEnvelope = { jobName, payload };
+    /* The caller named a domain. Which queue that is, is this adapter's
+       business and nobody else's — see queue-routing.ts. */
+    const queueName = queueNameFor(domain, payload.companyId);
 
-    const jobId = await this.#boss.send(domain, envelope, {
+    const jobId = await this.#boss.send(queueName, envelope, {
       db: executorFor(tx),
       priority: PRIORITY_VALUES[policy.priority],
       retryLimit: policy.retries,
@@ -74,7 +78,8 @@ export class PgBossQueue implements QueuePort {
          No domain uses one, so this means the queue is missing — which is a
          wiring error, not a runtime condition to swallow. */
       throw new Error(
-        `queue "${domain}" did not accept job "${jobName}". Was createQueues() called at startup?`,
+        `queue "${queueName}" did not accept job "${jobName}". ` +
+          'Was createQueues() called at startup?',
       );
     }
 
@@ -94,16 +99,20 @@ export class PgBossQueue implements QueuePort {
 export async function createQueues(boss: PgBoss): Promise<void> {
   for (const domain of QUEUE_DOMAINS) {
     const policy = QUEUE_POLICIES[domain];
-    const dead = deadLetterQueue(domain);
 
-    await boss.createQueue(dead);
-    await boss.createQueue(domain, {
-      name: domain,
-      policy: 'standard',
-      retryLimit: policy.retries,
-      retryBackoff: policy.backoff,
-      expireInSeconds: policy.timeoutSeconds,
-      deadLetter: dead,
-    });
+    /* Every queue backing the domain, not the domain name — a domain is one
+       queue today and need not stay that way (see queue-routing.ts). */
+    for (const queueName of queueNamesFor(domain)) {
+      const dead = deadLetterQueue(queueName);
+      await boss.createQueue(dead);
+      await boss.createQueue(queueName, {
+        name: queueName,
+        policy: 'standard',
+        retryLimit: policy.retries,
+        retryBackoff: policy.backoff,
+        expireInSeconds: policy.timeoutSeconds,
+        deadLetter: dead,
+      });
+    }
   }
 }

@@ -464,7 +464,15 @@ No per-tenant queues — at scale that is an unbounded number of queues, and pg-
 
 Take the claim query first, with guards 1–4. Fall back to partitioning only if the guards prove unsustainable, and record that as a new decision rather than a quiet substitution.
 
-**Why it is not deferrable:** without it, one tenant's bulk import occupies every worker slot and every other tenant's notifications stop. That is a full outage from one tenant's ordinary action, and it is the single most likely multi-tenant availability incident.
+**Implementation deferred to Phase 9 (T-159a).** The failure it prevents — one tenant's bulk import occupying every worker slot — requires many tenants under real load, which does not exist before launch. Building it in Phase 0 spends the project's most expensive engineering on a problem that cannot occur yet.
+
+**What Phase 0 must still do, because these are not cheap to retrofit:**
+- Every job payload carries `companyId` (ER-042a). Non-negotiable; fairness of any shape needs it.
+- `QueuePort`'s interface must **not assume one queue per domain**, so both the claim-query and hash-partition strategies remain available without touching enqueue sites.
+
+With those two in place, adding fairness later is contained to the adapter. Without them it is a change across every enqueue call in the codebase.
+
+**Before launch this becomes mandatory.** It is a launch-gate item in `13-delivery-plan.md` Phase 9, not an optional hardening step — one tenant able to halt every other tenant's notifications is a full outage caused by ordinary use.
 
 ---
 

@@ -36,12 +36,12 @@ The split is roughly 20/80. Opus for anything where a subtle mistake is a securi
 | T-010 | `shared/http`: envelope, cursor pagination, idempotency middleware. **Includes migration 001b (`idempotency_keys`) so this lands fully tested** | **Opus** |
 | T-011 | Test harness: `findneo_test_runner` role, test-DB migration path, template build, clone per test, pool discipline. **Fixture body deferred to T-020a** (D-048) | **Opus** |
 | T-012 | Fastify bootstrap: helmet, cors, cookie, rate-limit, swagger, under-pressure | Sonnet |
-| T-013 | Worker bootstrap: six domains, per-domain policy config, tenant binding, retry, dead-letter | **Opus** |
-| T-013a | **Tenant-fairness claim query in `QueuePort`** (D-040) | **Opus** |
+| T-013 | Worker bootstrap: six domains, per-domain policy config, tenant binding, retry, dead-letter. **Fixed per-domain concurrency, no per-tenant cap** | Sonnet |
+| ~~T-013a~~ | **Deferred to Phase 9** (D-040 amended). Phase 0 requires only that `QueuePort`'s interface does not assume one queue per domain, so either fairness strategy remains available | — |
 | T-013b | BFF module skeleton, `/bff/web/*` namespace, session adaptation | Sonnet |
-| T-014 | Pino with PII redaction paths, OpenTelemetry, `/health/live` + `/health/ready` | Sonnet |
+| T-014 | Pino with PII redaction paths, OpenTelemetry, `/health/live` + `/health/ready` + `/health/startup` on the loopback listener | Sonnet |
 | T-015 | CI pipeline per `11` §9 | Sonnet |
-| T-015a | **Consolidate control-integrity assertions** into one deploy-gating suite (`11` §3a) | **Opus** |
+| ~~T-015a~~ | **Deferred to Phase 9.** Pure refactor — the assertions already exist and already run | — |
 
 **Gate — none of this is optional:**
 - [ ] T-007 proves: unset context returns **zero** rows, not all rows
@@ -51,7 +51,9 @@ The split is roughly 20/80. Opus for anything where a subtle mistake is a securi
 - [ ] Both processes start, connect, and pass health checks
 - [ ] Linter rejects a BFF file importing a repository, and a domain file importing Drizzle
 - [ ] Six queue domains register with distinct policies
-- [ ] **Tenant fairness proven: one tenant flooding a domain does not stall another tenant's jobs in the same domain**
+- [ ] `QueuePort`'s interface does not assume one queue per domain (keeps both fairness strategies open)
+
+*Tenant fairness (former gate item 8) is deferred to Phase 9 — it guards a multi-tenant load problem that does not exist before launch.*
 
 **T-007 and T-011 are the highest-leverage work in the project.** Everything above them inherits their correctness, and a subtle error in either is invisible in every subsequent test. Budget real time; do not let an agent one-shot them.
 
@@ -295,6 +297,8 @@ Migration 022. **Blocked on O-001.** Structure exists; contract does not.
 
 | # | Task |
 |---|---|
+| T-159a | **Tenant fairness** — claim query in `QueuePort` with the four D-040 guards. Deferred from Phase 0 |
+| T-159b | **Consolidate control-integrity assertions** into one deploy-gating suite (`11` §3a). Deferred from Phase 0 |
 | T-160 | Full isolation suite across every module |
 | T-161 | Load test at target volumes (`11` §8) |
 | T-162 | Backup and **restore rehearsal** — restore tested, not assumed |
@@ -304,6 +308,7 @@ Migration 022. **Blocked on O-001.** Structure exists; contract does not.
 | T-166 | OpenAPI published, Swagger disabled in production |
 
 **Launch gate:**
+- [ ] Tenant fairness proven: one tenant flooding a domain does not stall another tenant's jobs in that domain
 - [ ] Every `BR-nnn` has a passing citing test
 - [ ] Isolation suite green
 - [ ] Penetration findings resolved or accepted in writing
