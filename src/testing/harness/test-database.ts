@@ -29,6 +29,15 @@ import { assertTestDatabaseName } from '../../platform/config/database-url.js';
  * Every database name this module creates or drops ends in `_test` and is
  * checked before the statement runs (D-046). The harness drops databases; a
  * name that slipped past the guard would take real work with it.
+ *
+ * **Cost:** roughly 500-700ms to clone and 150ms to drop, measured on the
+ * development machine. That is the price 11 §2 accepted for real isolation,
+ * and it is linear in the number of tests that ask for a database — so ask
+ * only when the test needs one.
+ *
+ * **Not parallel-safe yet.** Cloning terminates connections to the template,
+ * so two suites cloning at once would disconnect each other. `fileParallelism`
+ * is off; revisit together when it goes back on.
  */
 
 const TEMPLATE_DATABASE = 'findneo_template_test';
@@ -112,6 +121,31 @@ async function disconnectEveryoneFrom(client: Client, database: string): Promise
   );
 }
 
+/**
+ * Grants the database-level privileges a `TEMPLATE` copy does not carry.
+ *
+ * Table and schema privileges travel with the copy; the database's **own** ACL
+ * does not — a new database gets the default. That distinction is easy to miss
+ * and cost a round of failures: `CREATE SCHEMA` is authorised by `CREATE` on
+ * the *database*, not by anything on schema `public`, and Drizzle's migrator
+ * creates a `drizzle` schema to hold `__drizzle_migrations`. Without this the
+ * migration step fails with "permission denied for database".
+ *
+ * Run as the runner, which owns these databases and so may grant on them.
+ */
+async function grantDatabaseAccess(runnerUrl: string, database: string): Promise<void> {
+  await withClient(withDatabase(runnerUrl, database), async (client) => {
+    await execDatabaseStatement(client, 'REVOKE ALL ON DATABASE %I FROM PUBLIC', [database]);
+    await execDatabaseStatement(client, 'GRANT CONNECT, CREATE ON DATABASE %I TO %I', [
+      database,
+      'findneo_migrator',
+    ]);
+    for (const role of ['findneo_app', 'findneo_public', 'findneo_platform']) {
+      await execDatabaseStatement(client, 'GRANT CONNECT ON DATABASE %I TO %I', [database, role]);
+    }
+  });
+}
+
 /** The runner owns what it creates, so it can drop it — no SET ROLE. */
 async function dropDatabase(runnerUrl: string, database: string): Promise<void> {
   assertTestDatabaseName(withDatabase(runnerUrl, database), `drop ${database}`);
@@ -147,6 +181,8 @@ export async function buildTemplateDatabase(): Promise<void> {
       baseDatabase,
     ]);
   });
+
+  await grantDatabaseAccess(runnerUrl, TEMPLATE_DATABASE);
 
   const templateOwnerUrl = withDatabase(ownerUrl, TEMPLATE_DATABASE);
   await withClient(templateOwnerUrl, async (client) => {
@@ -189,10 +225,7 @@ export async function createTestDatabase(): Promise<TestDatabase> {
     ]);
   });
 
-  /* No database-level ACL fixup. Table and schema privileges travel with the
-     copy, and those are what every test asserts on; only the database's own
-     ACL is not copied, and nothing depends on it. Leaving the default also
-     keeps the migrator and app able to connect without another round trip. */
+  await grantDatabaseAccess(runnerUrl, name);
 
   return {
     name,
