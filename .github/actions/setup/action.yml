@@ -1,0 +1,20 @@
+# Shared setup: pnpm via corepack at the version package.json pins, Node 22,
+# and a warm store. Factored out so no job can drift onto a different pnpm.
+name: Setup
+description: Node, pnpm and dependencies
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: corepack enable
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: pnpm
+
+    # --frozen-lockfile: a lockfile that does not match package.json is a
+    # failure, not something to resolve on the fly (05a §12 pins exactly).
+    - shell: bash
+      run: pnpm install --frozen-lockfile

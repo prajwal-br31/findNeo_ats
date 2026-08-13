@@ -1,0 +1,198 @@
+# CI pipeline — 11 §9.
+#
+# Five static checks run in parallel and fail fast, then tests, then the
+# isolation suite, which is the job that blocks deploy. Nothing downstream of
+# a failing gate runs, so a red isolation suite cannot be merged past.
+#
+# Stages named in 11 §9 that are not here yet each have a reason, recorded in
+# the job that would run them rather than left as a silent omission.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # Mirrors what `pnpm db:setup` writes locally, so CI and a developer machine
+  # run the same suite against the same role layout (D-046, 11 §2).
+  PGHOST: localhost
+  PGUSER: postgres
+  PGPASSWORD: postgres
+  PGDATABASE: postgres
+
+jobs:
+  # ---------------------------------------------------------------- static --
+  # Parallel, fast fail. None of these need a database.
+
+  lint:
+    name: lint (eslint + boundaries)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm lint
+      # Not the same check: `pnpm lint` proves the codebase is clean, this
+      # proves the boundaries linter still *rejects* things. A resolver
+      # regression makes the first pass and the second fail (ER-052a).
+      - run: pnpm verify:boundaries
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm typecheck
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm format:check
+
+  semgrep:
+    name: semgrep (7 custom rules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # Planted violations, same as boundaries: a rule that silently stops
+      # matching is worse than no rule, because it reads as coverage.
+      #
+      # `verify:semgrep` uses a local semgrep if one is on PATH and otherwise
+      # runs the official image. The hosted runner has Docker, so no install
+      # step is needed here and CI matches what a developer runs locally.
+      - run: pnpm verify:semgrep
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans history, not just the tip
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ----------------------------------------------------------------- tests --
+
+  test:
+    name: unit + integration + API tests
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, format, semgrep, gitleaks]
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      # Provisions the three application roles, the test-runner role, and the
+      # template database. Needs a superuser, which the service container is.
+      - run: pnpm db:setup --force
+      - run: pnpm db:migrate
+      - run: pnpm db:migrate:test
+      - run: pnpm test
+
+  # ------------------------------------------------------------- isolation --
+
+  isolation:
+    name: ISOLATION SUITE (blocks deploy)
+    runs-on: ubuntu-latest
+    needs: [test]
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm db:setup --force
+      - run: pnpm db:migrate:test
+      # Run separately from `pnpm test` on purpose. These are the assertions
+      # that tenant isolation and the roles enforcing it are still switched on,
+      # and a deploy gate that is one line inside a 292-test run is not a gate.
+      #
+      # T-159b consolidates them into a single suite (11 §3a). Until then the
+      # list is explicit here — an implicit pattern match would silently cover
+      # nothing the day a file is renamed.
+      - run: pnpm test:isolation
+
+  # ------------------------------------------------------------ migrations --
+
+  migrations:
+    name: migration check (fresh)
+    runs-on: ubuntu-latest
+    needs: [test]
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm db:setup --force
+      # Fresh: every migration applies to an empty database, in order.
+      - run: pnpm db:migrate
+      # And is idempotent enough to be re-run, which is what an interrupted
+      # release leaves behind.
+      - run: pnpm db:migrate
+      #
+      # NOT YET RUNNING — the skip-version upgrade (11 §9, ER-032).
+      #
+      # It must upgrade from the *previous release tag*, and there is no
+      # release tag yet. Adding it now would either pass vacuously or pin a
+      # fake baseline, and both are worse than its absence being visible.
+      # It lands with the first tagged release; ER-032 is the reason it is not
+      # optional then.
+
+  # ----------------------------------------------------------- supply chain --
+
+  audit:
+    name: pnpm audit + osv-scanner
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, format, semgrep, gitleaks]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: pnpm audit --audit-level high
+      - uses: google/osv-scanner-action/osv-scanner-action@v2.0.2
+        with:
+          scan-args: |-
+            --lockfile=pnpm-lock.yaml
+  # Two stages from 11 §9 are deliberately absent, not forgotten:
+  #
+  #   - **openapi regeneration (no diff)** — there is no committed OpenAPI
+  #     document to diff against, because Phase 0 registers no `/v1` routes.
+  #     It lands with the first route, in Phase 1.
+  #
+  #   - **business-rule coverage check** — the business rules it checks
+  #     coverage of do not exist yet. Same reason, same phase.

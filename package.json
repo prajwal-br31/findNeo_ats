@@ -23,7 +23,8 @@
     "verify:semgrep": "tsx scripts/verify-semgrep.ts",
     "db:setup": "tsx scripts/setup-dev-db.ts",
     "config:check": "node --env-file-if-exists=.env --import tsx src/platform/config/config.cli.ts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "test:isolation": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run src/platform/db/__tests__/tenant-context.test.ts src/platform/db/__tests__/role-privileges.test.ts src/testing/harness/__tests__/test-database.test.ts"
   },
   "lint-staged": {
     "*.ts": [
