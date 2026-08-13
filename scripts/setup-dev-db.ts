@@ -199,6 +199,25 @@ async function ensureRole(client: Client, role: RoleName, rolesOnly = false): Pr
   process.stdout.write(`  role ${role.padEnd(18)} ${creating ? 'created' : 'updated'}\n`);
 }
 
+/**
+ * `CREATEDB` alone is not enough to create a database owned by someone else.
+ *
+ * PostgreSQL requires the creating role to be a member of the owning role:
+ * "must be able to SET ROLE findneo_migrator". D-048a puts ownership of the
+ * clones with the migrator, so the runner needs membership to hand it over.
+ *
+ * The runner is `NOINHERIT`, so this grants no ambient privilege — it cannot
+ * quietly act as the migrator, it must `SET ROLE` deliberately. The isolation
+ * suite asserts no production role holds this membership.
+ */
+async function grantMigratorMembership(client: Client): Promise<void> {
+  await execFormatted(client, `GRANT ${MIGRATOR_ROLE} TO ${TEST_RUNNER_ROLE}`, 'GRANT %I TO %I', [
+    MIGRATOR_ROLE,
+    TEST_RUNNER_ROLE,
+  ]);
+  process.stdout.write(`  membership         ${TEST_RUNNER_ROLE} -> ${MIGRATOR_ROLE}\n`);
+}
+
 async function setRolePassword(client: Client, role: RoleName, password: string): Promise<void> {
   await execFormatted(client, `set password for ${role}`, 'ALTER ROLE %I PASSWORD %L', [
     role,
@@ -352,6 +371,26 @@ OTEL_ENABLED=false
 `;
 }
 
+/** Roles, their attributes and memberships, and the two databases. */
+async function provisionCluster(
+  passwords: ReadonlyMap<RoleName, string>,
+  rolesOnly: boolean,
+): Promise<void> {
+  const admin = await connect(process.env['PGDATABASE'] ?? 'postgres');
+  try {
+    await assertServerVersion(admin);
+    process.stdout.write('PostgreSQL 18 confirmed.\n\n');
+    for (const role of PROVISIONED_ROLES) {
+      await ensureRole(admin, role, rolesOnly);
+      if (!rolesOnly) await setRolePassword(admin, role, passwords.get(role) ?? '');
+    }
+    await grantMigratorMembership(admin);
+    for (const database of [DEV_DATABASE, TEST_DATABASE]) await ensureDatabase(admin, database);
+  } finally {
+    await admin.end();
+  }
+}
+
 async function main(): Promise<void> {
   const force = process.argv.includes('--force');
   /* Re-applies role attributes and grants without rotating passwords or
@@ -375,18 +414,7 @@ async function main(): Promise<void> {
     PROVISIONED_ROLES.map((role): [RoleName, string] => [role, generateSecret(24)]),
   );
 
-  const admin = await connect(process.env['PGDATABASE'] ?? 'postgres');
-  try {
-    await assertServerVersion(admin);
-    process.stdout.write('PostgreSQL 18 confirmed.\n\n');
-    for (const role of PROVISIONED_ROLES) {
-      await ensureRole(admin, role, rolesOnly);
-      if (!rolesOnly) await setRolePassword(admin, role, passwords.get(role) ?? '');
-    }
-    for (const database of [DEV_DATABASE, TEST_DATABASE]) await ensureDatabase(admin, database);
-  } finally {
-    await admin.end();
-  }
+  await provisionCluster(passwords, rolesOnly);
 
   for (const database of [DEV_DATABASE, TEST_DATABASE]) await prepareDatabase(database);
 

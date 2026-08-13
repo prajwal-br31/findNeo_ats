@@ -108,6 +108,16 @@ A module without genuine invariants has no `domain/` folder. Creating an empty o
 ### ER-009 — No file over ~300 lines, no function over ~40
 Not a style preference: a 200-line service method cannot be reviewed for security. Extract named helpers whose names describe the rule they enforce (`assertWithinApplicationCap`, not `check2`).
 
+### ER-009a — A boundary rule that blocks the composition root means the API is wrong
+When a layer or entry-point restriction blocks `bootstrap/`, do **not** add an exemption. Exemptions accumulate, and each one is a place the rule silently stops applying.
+
+Fix the API instead: expose a factory that gives the composition root exactly what it needs, so nothing outside the module ever reaches for an internal. `platform/db` exports `createUnitOfWork()` rather than a pool and a separate wiring step — the restriction stays absolute and the API is better for it.
+
+### ER-009b — Test files are their own element, not part of the layer they sit in
+`__tests__/` directories must be classified **ahead of** the enclosing layer. Otherwise a test inherits its layer's import restrictions and cannot exercise the layers below it.
+
+Tests may import anything. **Nothing production may import a test** — proven by a planted violation, not assumed.
+
 ### ER-010 — No barrel files re-exporting across modules
 `modules/jobs/index.ts` exporting internals makes ER-007 unenforceable. Import the specific file.
 

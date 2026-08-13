@@ -93,6 +93,36 @@ describe('D-048a: only the test runner may create databases', () => {
   });
 });
 
+describe('role membership is not a back door', () => {
+  async function isMemberOf(member: string, group: string): Promise<boolean> {
+    const result = await ownerPool.query<{ member: boolean }>(
+      'SELECT pg_has_role($1, $2, $3) AS member',
+      [member, group, 'member'],
+    );
+    return result.rows[0]?.member ?? false;
+  }
+
+  it('findneo_test_runner is a member of findneo_migrator, as CREATE DATABASE … OWNER requires', async () => {
+    expect(await isMemberOf('findneo_test_runner', 'findneo_migrator')).toBe(true);
+  });
+
+  it.each(['findneo_app', 'findneo_public', 'findneo_platform'])(
+    '%s is NOT a member of findneo_migrator',
+    async (name) => {
+      /* Membership would hand a serving role BYPASSRLS by way of SET ROLE —
+         the one capability the whole tenant model depends on withholding. */
+      expect(await isMemberOf(name, 'findneo_migrator')).toBe(false);
+    },
+  );
+
+  it.each(['findneo_app', 'findneo_public', 'findneo_platform'])(
+    '%s is NOT a member of findneo_test_runner',
+    async (name) => {
+      expect(await isMemberOf(name, 'findneo_test_runner')).toBe(false);
+    },
+  );
+});
+
 describe('SEC-003a: migrator credentials cannot reach a serving process', () => {
   it('no application config field can hold the migrator connection string', () => {
     /* The whole control rests on this. If DATABASE_URL_MIGRATOR ever became
