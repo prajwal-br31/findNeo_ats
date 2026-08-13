@@ -3,6 +3,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
+    /* The template database is built once for the whole run, not per file:
+       rebuilding it mid-run races with any file cloning from it. */
+    globalSetup: ['./src/testing/harness/global-setup.ts'],
     environment: 'node',
     /*
      * Phase 0 shares one test database, so files must not overlap. T-011

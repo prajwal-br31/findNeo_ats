@@ -4,11 +4,7 @@ import { AppError } from '../../../shared/errors/app-error.js';
 import { unsafeCompanyId, type CompanyId } from '../../../shared/types/ids.js';
 import { DrizzleIdempotencyStore } from '../../../platform/db/idempotency-store.js';
 import { createUnitOfWork, type UnitOfWorkHandle } from '../../../platform/db/unit-of-work.js';
-import {
-  buildTemplateDatabase,
-  createTestDatabase,
-  type TestDatabase,
-} from '../../../testing/harness/test-database.js';
+import { createTestDatabase, type TestDatabase } from '../../../testing/harness/test-database.js';
 import {
   IdempotencyInFlightError,
   abandonIdempotent,
@@ -32,7 +28,6 @@ const COMPANY = unsafeCompanyId('01920000-0000-7000-8000-0000000000a1');
 const NOW = new Date('2026-08-13T09:00:00.000Z');
 
 beforeAll(async () => {
-  await buildTemplateDatabase();
   database = await createTestDatabase();
   handle = createUnitOfWork({ url: database.appUrl, poolMax: 4, applicationName: 'idem-test' });
   deps = { uow: handle.uow, store: new DrizzleIdempotencyStore(), now: () => NOW };

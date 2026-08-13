@@ -38,6 +38,7 @@
     "@sinclair/typebox": "0.34.52",
     "ajv": "8.20.0",
     "drizzle-orm": "0.45.2",
+    "lru-cache": "^11.5.2",
     "pg": "8.23.0"
   },
   "devDependencies": {
