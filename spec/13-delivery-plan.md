@@ -38,7 +38,7 @@ The split is roughly 20/80. Opus for anything where a subtle mistake is a securi
 | T-012 | Fastify bootstrap: helmet, cors, cookie, rate-limit, swagger, under-pressure | Sonnet |
 | T-013 | Worker bootstrap: six domains, per-domain policy config, tenant binding, retry, dead-letter. **Fixed per-domain concurrency, no per-tenant cap** | Sonnet |
 | ~~T-013a~~ | **Deferred to Phase 9** (D-040 amended). Phase 0 requires only that `QueuePort`'s interface does not assume one queue per domain, so either fairness strategy remains available | — |
-| T-013b | BFF module skeleton, `/bff/web/*` namespace, session adaptation | Sonnet |
+| ~~T-013b~~ | **Deferred to Phase 1**, alongside T-030. A BFF skeleton with no application services beneath it is an empty namespace, and the aggregation shape would be a guess. The boundary rules that matter (BFF cannot import a repository) are already live and proven by a planted violation, so nothing is lost by waiting | — |
 | T-014 | Pino with PII redaction paths, OpenTelemetry, `/health/live` + `/health/ready` + `/health/startup` on the loopback listener | Sonnet |
 | T-015 | CI pipeline per `11` §9 | Sonnet |
 | ~~T-015a~~ | **Deferred to Phase 9.** Pure refactor — the assertions already exist and already run | — |
@@ -77,6 +77,7 @@ Migrations 001–015. Spec: `06-data-model.md`, `08-lld-identity.md`, `04-permis
 | T-028 | Authorization middleware, route metadata, fail-closed registration | **Opus** |
 | T-029 | Masking layer + `field_visibility_rules` resolution | **Opus** |
 | T-030 | Users CRUD, invitations | Sonnet |
+| T-013b | **BFF module skeleton**, `/bff/web/*` namespace, session adaptation. Deferred from Phase 0 — built here, where Identity gives it real use cases to adapt | Sonnet |
 | T-031 | Departments, membership | Sonnet |
 | T-032 | Roles, role assignment, escalation guard | **Opus** |
 | T-033 | Platform admin surface + audited impersonation | **Opus** |

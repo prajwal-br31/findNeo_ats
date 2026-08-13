@@ -11,12 +11,24 @@ dist/
 .env.*
 !.env.example
 
-# Local filesystem StoragePort root (D-004)
-var/storage/
+# Local runtime state: the filesystem StoragePort root (D-004) and anything
+# else a process writes beside the code. Ignored wholesale rather than
+# per-subdirectory, so a new writer cannot land uploaded files in a commit.
+var/
 
 # Test and coverage output
 coverage/
 *.log
+
+# Key material. Nothing should ever produce these here — JWT keys travel
+# base64-encoded inside .env (ER-046) — which is exactly why an accidental one
+# must not be reachable by `git add .`.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
 
 # Editor / OS
 .DS_Store
