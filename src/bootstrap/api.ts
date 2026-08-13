@@ -4,12 +4,19 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
-import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from 'fastify';
 import { randomUUID } from 'node:crypto';
 
 import type { AuthController } from '../modules/identity/auth.controller.js';
 import { registerIdentityRoutes } from '../modules/identity/identity.routes.js';
 import type { Config } from '../platform/config/config.types.js';
+import type { TokenVerifierPort } from '../shared/ports/token-issuer.js';
+import { registerAuthentication, requireAuth } from './authentication.js';
 import { describeForLog, toProblemDetails } from '../shared/errors/problem-details.js';
 import {
   assertRouteMetadata,
@@ -130,9 +137,39 @@ function registerErrorHandling(app: FastifyInstance): void {
   });
 }
 
+/**
+ * OpenAPI generation. The **UI** is served by the ops listener, not here:
+ * `/docs` is a development tool and the ops listener is loopback-only, so it
+ * needs no route exemption, no SEC-021 interaction and no authentication
+ * carve-out. This instance carries the permission model; nothing that does not
+ * need to be on it, is.
+ */
+async function registerDocumentation(app: FastifyInstance, config: Config): Promise<void> {
+  await app.register(swagger, {
+    openapi: {
+      info: { title: 'FindNeo API', version: '1' },
+      servers: [{ url: `http://${config.api.host}:${String(config.api.port)}` }],
+      components: {
+        securitySchemes: {
+          /* Named so `security: [{ bearerAuth: [] }]` on a route lights up the
+             Authorize box. The access token goes here; the refresh token never
+             does — it is an httpOnly cookie the browser sends on its own. */
+          bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+        },
+      },
+    },
+  });
+}
+
 function registerModules(app: FastifyInstance, config: Config, deps: ApiDependencies): void {
+  registerAuthentication(app, deps.tokenVerifier);
+
   registerIdentityRoutes(app, {
     controller: deps.authController,
+    currentUser: (request) => {
+      const auth = requireAuth(request as FastifyRequest);
+      return { companyId: auth.companyId, userId: auth.userId };
+    },
     setRefreshCookie: (reply, token) => {
       setRefreshCookie(reply as FastifyReply, token, config);
     },
@@ -145,6 +182,17 @@ function registerModules(app: FastifyInstance, config: Config, deps: ApiDependen
 
 export interface ApiDependencies {
   readonly authController: AuthController;
+  /**
+   * The application logger.
+   *
+   * Not optional in practice: `registerErrorHandling` reports every 5xx
+   * through `request.log`, and with Fastify's `logger: false` that call is a
+   * no-op — so a 500 returns a traceId that appears in no log anywhere, which
+   * is worse than no traceId at all. It was exactly that silence that hid a
+   * signup failure behind an opaque 500.
+   */
+  readonly logger?: FastifyBaseLogger;
+  readonly tokenVerifier: TokenVerifierPort;
   /**
    * Development only. When present, `GET /v1/dev/last-email` is registered and
    * signup's verification token is captured into the development outbox.
@@ -168,7 +216,9 @@ export async function buildApiServer(config: Config, deps?: ApiDependencies): Pr
     requestIdHeader: 'x-request-id',
     trustProxy: config.nodeEnv === 'production' || config.nodeEnv === 'staging',
     disableRequestLogging: true,
-    logger: false,
+    // A pre-built Pino instance goes in `loggerInstance`; `logger` only takes
+    // a config object or false.
+    ...(deps?.logger === undefined ? { logger: false } : { loggerInstance: deps.logger }),
   });
 
   /* SEC-021, enforced at boot. A route without metadata throws here, which
@@ -192,12 +242,7 @@ export async function buildApiServer(config: Config, deps?: ApiDependencies): Pr
 
      It adds no routes of its own, so it does not collide with SEC-021. The UI
      is served from the ops listener (07 §7, 12 §10). */
-  await app.register(swagger, {
-    openapi: {
-      info: { title: 'FindNeo API', version: '1' },
-      servers: [{ url: `http://${config.api.host}:${String(config.api.port)}` }],
-    },
-  });
+  await registerDocumentation(app, config);
 
   registerSecurity(app, config);
   registerErrorHandling(app);

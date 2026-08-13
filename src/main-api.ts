@@ -39,6 +39,8 @@ const isDevelopment = config.nodeEnv === 'development';
 
 const api = await buildApiServer(config, {
   authController: container.authController,
+  tokenVerifier: container.tokenVerifier,
+  logger,
   ...(isDevelopment
     ? {
         captureVerificationToken: (info) => {

@@ -28,3 +28,21 @@ export interface IssuedAccessToken {
 export interface TokenIssuerPort {
   issueAccessToken(claims: AccessTokenClaims): Promise<IssuedAccessToken>;
 }
+
+/**
+ * Verification is a separate port from issuance.
+ *
+ * The API verifies but never issues on most paths, and a future service that
+ * only validates tokens should not be handed a signing key by the type system.
+ */
+export interface VerifiedClaims {
+  readonly sub: string;
+  readonly sid: string;
+  readonly cid: string | null;
+  readonly cap: number;
+}
+
+export interface TokenVerifierPort {
+  /** `undefined` for any invalid token. Never throws for a bad signature. */
+  verifyAccessToken(token: string): Promise<VerifiedClaims | undefined>;
+}

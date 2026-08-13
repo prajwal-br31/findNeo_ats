@@ -85,6 +85,20 @@
       "when": 1786612677996,
       "tag": "0015_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786612737996,
+      "tag": "0014_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786612797996,
+      "tag": "0016_global_email_uniqueness",
+      "breakpoints": true
     }
   ]
 }

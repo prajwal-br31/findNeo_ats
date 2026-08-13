@@ -5,7 +5,9 @@ import {
   Argon2PasswordHasher,
   dummyPasswordHash,
 } from '../platform/crypto/argon2-password-hasher.js';
-import { JwtTokenIssuer } from '../platform/crypto/jwt-token-issuer.js';
+import { JwtTokenIssuer, JwtTokenVerifier } from '../platform/crypto/jwt-token-issuer.js';
+import { SecretBox } from '../platform/crypto/secret-box.js';
+import { beginTotpEnrolment, verifyTotp } from '../platform/crypto/totp.js';
 import { PgBossQueue } from '../platform/queue/pg-boss-queue.js';
 import { SystemClock } from '../platform/clock/system-clock.js';
 import type { Config } from '../platform/config/config.types.js';
@@ -19,7 +21,7 @@ import type { IdempotencyStorePort } from '../shared/ports/idempotency-store.js'
 import type { MailPort } from '../shared/ports/mail.js';
 import type { StoragePort } from '../shared/ports/storage.js';
 import type { PasswordHasherPort } from '../shared/ports/password-hasher.js';
-import type { TokenIssuerPort } from '../shared/ports/token-issuer.js';
+import type { TokenIssuerPort, TokenVerifierPort } from '../shared/ports/token-issuer.js';
 import type { UnitOfWorkPort } from '../shared/ports/unit-of-work.js';
 import { AuthService } from '../modules/identity/application/auth.service.js';
 import { AuthController } from '../modules/identity/auth.controller.js';
@@ -44,6 +46,7 @@ export interface Container {
   readonly idempotency: IdempotencyStorePort;
   readonly hasher: PasswordHasherPort;
   readonly tokens: TokenIssuerPort;
+  readonly tokenVerifier: TokenVerifierPort;
   readonly authController: AuthController;
   close(): Promise<void>;
 }
@@ -87,6 +90,42 @@ async function buildQueue(config: Config): Promise<{ boss: PgBoss; queue: PgBoss
   return { boss, queue: new PgBossQueue(boss) };
 }
 
+interface IdentityDeps {
+  readonly database: UnitOfWorkHandle;
+  readonly hasher: Argon2PasswordHasher;
+  readonly tokens: JwtTokenIssuer;
+  readonly queue: PgBossQueue;
+  readonly clock: SystemClock;
+  readonly secretBox: SecretBox;
+}
+
+/** The identity module's object graph. */
+function buildIdentity(deps: IdentityDeps): AuthController {
+  const { database, hasher, tokens, queue, clock, secretBox } = deps;
+
+  return new AuthController(
+    new AuthService({
+      uow: database.uow,
+      repository: new IdentityRepository(),
+      hasher,
+      tokens,
+      queue,
+      clock,
+      dummyHash: () => dummyPasswordHash(hasher),
+      /* TOTP and secret encryption reach the application layer as functions
+         rather than imports: `otpauth` and node crypto are platform concerns
+         (ER-011), and the service should not know which library provides
+         them. */
+      mfa: {
+        begin: (label) => beginTotpEnrolment(label),
+        verify: (secret, label, code) => verifyTotp(secret, label, code),
+        encrypt: (plaintext) => secretBox.encrypt(plaintext),
+        decrypt: (envelope) => secretBox.decrypt(envelope),
+      },
+    }),
+  );
+}
+
 export async function buildContainer(config: Config): Promise<Container> {
   const database: UnitOfWorkHandle = createUnitOfWork({
     url: config.database.url,
@@ -97,26 +136,19 @@ export async function buildContainer(config: Config): Promise<Container> {
   const clock = new SystemClock();
   const hasher = new Argon2PasswordHasher();
   const tokens = new JwtTokenIssuer(config.auth.jwtPrivateKeyPem, clock);
+  const tokenVerifier = new JwtTokenVerifier(config.auth.jwtPublicKeyPem);
+  const secretBox = new SecretBox(config.auth.secretEncryptionKey);
 
   const { boss, queue } = await buildQueue(config);
 
-  const authController = new AuthController(
-    new AuthService({
-      uow: database.uow,
-      repository: new IdentityRepository(),
-      hasher,
-      tokens,
-      queue,
-      clock,
-      dummyHash: () => dummyPasswordHash(hasher),
-    }),
-  );
+  const authController = buildIdentity({ database, hasher, tokens, queue, clock, secretBox });
 
   return {
     config,
     clock,
     hasher,
     tokens,
+    tokenVerifier,
     authController,
     cache: new LruCacheAdapter(),
     storage: buildStorage(config),

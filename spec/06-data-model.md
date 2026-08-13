@@ -153,15 +153,20 @@ Global identity for internal actors: HR, hiring managers, interviewers, coordina
 | `created_at` / `updated_at` | timestamptz | |
 
 ```sql
-CREATE UNIQUE INDEX ux_users_company_email ON users (company_id, email)
-  WHERE company_id IS NOT NULL;
-CREATE UNIQUE INDEX ux_users_platform_email ON users (email)
-  WHERE company_id IS NULL;
+-- Email is globally unique across ALL users, tenant and platform alike (D-049).
+CREATE UNIQUE INDEX ux_users_email ON users (email)
+  WHERE anonymized_at IS NULL;
 CONSTRAINT ux_users_id_company UNIQUE (id, company_id)   -- composite FK target
 CREATE INDEX ix_users_company_created ON users (company_id, created_at DESC);
 ```
 
 `ux_users_id_company` looks redundant against the primary key. It is not — it is the target every composite tenant-safe FK in §4 points at, and without it those FKs cannot be declared.
+
+**Email is globally unique, not tenant-scoped** (D-049). Login is email-first at one fixed domain (D-006), so a tenant-scoped index would make the lookup ambiguous — the same address in two companies gives two candidate users and no way to choose without asking for a company, which D-006's superseded table already rejected.
+
+This also resolves O-011: a platform-staff address cannot collide with a tenant user's.
+
+**Accepted limitation:** one person cannot hold accounts at two companies under the same address. Given BR-005 (a user belongs to exactly one company), that is already close to the intended model. If it becomes a real constraint, the upgrade path is a second login step that disambiguates **after** password verification — never before, since listing an address's companies pre-authentication is an enumeration oracle.
 
 **Brute-force lockout is inline** (`failed_login_count`, `locked_until`). There is no `login_attempts` table; it never existed despite appearing in prior handoff documents.
 
@@ -741,7 +746,7 @@ Foreign key dependencies force this sequence:
 
 ## 9. Seed data
 
-**Permission catalog** (~45 keys for v1), by category:
+**Permission catalog** — the authoritative list is `04-permissions.md` §2 (76 keys). Grouped here by category for orientation only; where the two differ, `04` wins:
 
 | Category | Keys |
 |---|---|
@@ -759,7 +764,7 @@ Foreign key dependencies force this sequence:
 
 `jobs.read` vs `jobs.read.all` is the department-scope distinction: the former sees your departments and your hiring-team jobs, the latter sees everything in the company. `jobs.confidential.read` is separate again — confidential jobs are visible only to their hiring team regardless of either.
 
-**Default roles** (`company_id IS NULL`, `is_editable = false`):
+**Default roles** — eight, per `04-permissions.md` §3's matrix (`company_id IS NULL`, `is_editable = false`). An earlier draft of this section listed seven and omitted `recruiter`; `04` is authoritative:
 
 | Role | Scope | Shape |
 |---|---|---|
@@ -767,6 +772,7 @@ Foreign key dependencies force this sequence:
 | `super_admin` | company | Tenant owner. Full company access, MFA mandatory |
 | `org_admin_hr` | company | Jobs, pipelines, users, agencies, compensation visible |
 | `hiring_manager` | department | Own requisitions and pipeline. Blind outside their departments |
+| `recruiter` | company | Sources and progresses candidates across assigned jobs |
 | `coordinator` | company | Scheduling and logistics. **No** compensation, **no** feedback scores |
 | `interviewer` | job | Assigned interviews and own feedback only |
 | `agency_recruiter` | company | Agency portal only. Never sees internal communication or scorecards |

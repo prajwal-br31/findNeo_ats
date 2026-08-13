@@ -45,6 +45,8 @@ export interface AuthSecretsConfig {
   readonly jwtPrivateKeyPem: string;
   readonly jwtPublicKeyPem: string;
   readonly cookieSecret: string;
+  /** base64, 32 bytes. Encrypts secrets at rest. */
+  readonly secretEncryptionKey: string;
 }
 
 export interface Config {

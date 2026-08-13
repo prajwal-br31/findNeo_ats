@@ -60,6 +60,8 @@ When any other document, prior chat transcript, or session extraction disagrees 
 | D-046 | Local development and tests run against native PostgreSQL, not Testcontainers | Accepted |
 | D-047 | RLS policy uses `nullif` on the tenant GUC; migrator holds BYPASSRLS | Accepted |
 | D-048 | Test-only `findneo_test_runner` role holds CREATEDB; T-011 splits | Accepted |
+| D-049 | User email is globally unique, not tenant-scoped | Accepted |
+| D-050 | Owner role granted at MFA enrolment, not at signup | Accepted |
 
 ---
 
@@ -646,6 +648,44 @@ Database ownership and table ownership are separate. **Table** ownership inside 
 
 ---
 
+### D-049 — User email is globally unique
+**Accepted.** Amends `06-data-model.md` §3. Resolves O-011.
+
+One partial unique index on `users (email) WHERE anonymized_at IS NULL`, replacing the two tenant-scoped and platform-scoped indexes.
+
+**Why:** login is email-first at one fixed domain (D-006). A tenant-scoped index permits the same address in two companies, which makes the login lookup ambiguous with no way to resolve it short of asking for a company — and D-006's superseded table already rejected subdomain and tenant-first login.
+
+**Accepted limitation:** one person cannot hold accounts at two companies under one address. Given BR-005, that is close to the intended model already.
+
+**Upgrade path if it bites:** a second login step disambiguating **after** password verification. Never before — listing an address's companies pre-authentication is an enumeration oracle (SEC-015).
+
+**Also resolves O-011:** a platform-staff address cannot collide with a tenant user's, because there is now one index over both.
+
+---
+
+### D-050 — Owner role granted at MFA enrolment, not at signup
+**Accepted.** Resolves the conflict between `trg_owner_requires_mfa` (migration 014) and signup step (e).
+
+The trigger blocks granting `super_admin` to a user without MFA. Signup cannot grant it, because the founding owner has not enrolled.
+
+**The trigger is not exempted.** An exempted security trigger is a trigger with a hole, and the founding grant is the one that matters most — it is the account that can reassign every permission in the tenant.
+
+**The grant moves instead:**
+
+```
+signup       → company 'pending_verification', user 'pending',
+                owner_user_id set, no role grant
+verify-email → user 'active'
+enable-mfa   → ONE transaction: mfa_enabled = true,
+                grant super_admin, company → 'active'
+```
+
+A company holds an `owner_user_id` with no role-holder until enrolment completes. Safe, because the company is not `active` and no tenant route will serve it.
+
+**Rejected: exempting the founding assignment.** It would make BR-011 conditional at exactly the point it is most load-bearing, and the exemption would be permanent surface for a one-time need.
+
+---
+
 ## Open items
 
 | ID | Item | Blocks |
@@ -664,7 +704,7 @@ Database ownership and table ownership are separate. **Table** ownership inside 
 | O-008 | Product name — FindNeo vs RecruitAI | Public-facing copy only |
 | O-009 | Uptime SLA target | NFR verification, not code |
 | O-010 | Guest panelist read access to the application they interview for | Interviews module |
-| O-011 | Same email in both platform-staff and tenant-user space — allowed? | Identity module edge case |
+| ~~O-011~~ | ~~Same email in platform-staff and tenant-user space~~ | **Resolved by D-049** |
 | O-012 | Candidate declines all proposed interview slots | Interviews module; deferred deliberately |
 
 ---

@@ -57,6 +57,11 @@ export const RawEnvSchema = Type.Object(
     JWT_PRIVATE_KEY: Type.String({ minLength: 1 }),
     JWT_PUBLIC_KEY: Type.String({ minLength: 1 }),
     COOKIE_SECRET: Type.String({ minLength: 32 }),
+    /* base64 of 32 random bytes. Encrypts secrets held at rest — today the
+       TOTP seed in users.mfa_secret_encrypted (SEC-047). Separate from
+       COOKIE_SECRET on purpose: one key, one job, so rotating either does not
+       force rotating the other. */
+    SECRET_ENCRYPTION_KEY: Type.String({ minLength: 44 }),
 
     /* Which queue domains this process serves. Comma-separated, or `all`.
        05 §5: one process per domain in production, all six in one process

@@ -42,6 +42,14 @@ export class AuthController {
     return this.#service.login(body.email, body.password, meta);
   }
 
+  async beginMfa(companyId: string, userId: string): Promise<{ secret: string; uri: string }> {
+    return this.#service.beginMfaEnrolment(unsafeCompanyId(companyId), unsafeUserId(userId));
+  }
+
+  async completeMfa(companyId: string, userId: string, code: string): Promise<void> {
+    await this.#service.enableMfa(unsafeCompanyId(companyId), unsafeUserId(userId), code);
+  }
+
   async verifyEmail(body: VerifyEmailBody): Promise<void> {
     await this.#service.verifyEmail(
       unsafeCompanyId(body.companyId),

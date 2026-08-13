@@ -31,7 +31,13 @@ export interface AuthUserRow extends Record<string, unknown> {
   readonly emailVerifiedAt: Date | null;
   readonly mfaEnabled: boolean;
   readonly failedLoginCount: number;
-  readonly lockedUntil: Date | null;
+  /**
+   * `Date | string` because it depends on how it was read: the driver returns
+   * a Date from a plain SELECT and a string from the set-returning
+   * `auth_lookup_user_by_email`. Typed as both so callers are forced to
+   * coerce, rather than being told it is a Date and finding out otherwise.
+   */
+  readonly lockedUntil: Date | string | null;
 }
 
 export interface InsertCompanyInput {
@@ -146,37 +152,42 @@ export class IdentityRepository {
   }
 
   /**
-   * Looks a user up for authentication.
+   * Looks a user up for authentication, before any tenant is known.
    *
-   * Deliberately **not** tenant-scoped: login happens before any tenant
-   * context exists, so this runs under `withoutTenant`. Email is unique per
-   * company, so a single address could in principle exist in two tenants —
-   * `limit 1` with a deterministic order keeps the outcome stable rather than
-   * depending on physical row order.
+   * Goes through `auth_lookup_user_by_email`, a SECURITY DEFINER function
+   * created in migration 016. It has to: login runs under `withoutTenant`, and
+   * `users` is under FORCE ROW LEVEL SECURITY whose policy matches nothing
+   * when the GUC is unset — so a plain SELECT here returns zero rows and login
+   * can never succeed for anyone.
    *
-   * Platform staff (`company_id is null`) are excluded: they authenticate on
-   * the separate platform surface (08 §2), and letting them through here would
-   * put staff credentials on the tenant login endpoint.
+   * The function is the narrow alternative to widening the policy. It returns
+   * only the columns authentication needs, excludes platform staff, and is the
+   * single pre-tenant read path in the system. Email is globally unique
+   * (D-049), so there is exactly one candidate row and no ambiguity to resolve.
    */
   async findAuthUserByEmail(tx: TxScope, email: string): Promise<AuthUserRow | undefined> {
     const result = await unwrapTxScope(tx).execute<AuthUserRow>(sql`
       select id,
-             company_id        as "companyId",
+             company_id         as "companyId",
              email,
-             full_name         as "fullName",
-             password_hash     as "passwordHash",
+             password_hash      as "passwordHash",
              status,
-             email_verified_at as "emailVerifiedAt",
-             mfa_enabled       as "mfaEnabled",
+             email_verified_at  as "emailVerifiedAt",
+             mfa_enabled        as "mfaEnabled",
              failed_login_count as "failedLoginCount",
-             locked_until      as "lockedUntil"
-        from users
-       where email = ${email} and company_id is not null
-       order by created_at
-       limit 1
+             locked_until       as "lockedUntil"
+        from auth_lookup_user_by_email(${email}::citext)
     `);
 
     return result.rows[0];
+  }
+
+  /** The user's display name, read once tenant context is bound. */
+  async findFullName(tx: TxScope, userId: UserId): Promise<string> {
+    const result = await unwrapTxScope(tx).execute<{ fullName: string }>(sql`
+      select full_name as "fullName" from users where id = ${userId}
+    `);
+    return result.rows[0]?.fullName ?? '';
   }
 
   /**
@@ -192,26 +203,16 @@ export class IdentityRepository {
     threshold: number,
     lockMinutes: number,
   ): Promise<void> {
-    await unwrapTxScope(tx).execute(sql`
-      update users
-         set failed_login_count = failed_login_count + 1,
-             locked_until = case
-               when failed_login_count + 1 >= ${threshold}
-               then now() + make_interval(mins => ${lockMinutes})
-               else locked_until
-             end,
-             updated_at = now()
-       where id = ${userId}
-    `);
+    /* Also a SECURITY DEFINER function, for the same reason as the lookup: it
+       runs before a tenant is bound, so an ordinary UPDATE would match no rows
+       and the lockout counter would never move. */
+    await unwrapTxScope(tx).execute(
+      sql`select auth_record_failed_login(${userId}::uuid, ${threshold}, ${lockMinutes})`,
+    );
   }
 
   async recordSuccessfulLogin(tx: TxScope, userId: string): Promise<void> {
-    await unwrapTxScope(tx).execute(sql`
-      update users
-         set failed_login_count = 0, locked_until = null,
-             last_login_at = now(), updated_at = now()
-       where id = ${userId}
-    `);
+    await unwrapTxScope(tx).execute(sql`select auth_record_successful_login(${userId}::uuid)`);
   }
 
   async insertSession(tx: TxScope, input: InsertSessionInput): Promise<{ id: string }> {
@@ -268,22 +269,61 @@ export class IdentityRepository {
   }
 
   /**
-   * Activates a verified user and their company in one statement each.
-   *
-   * The company moves out of `pending_verification` at the same time: a
-   * verified owner with a company still pending is a state nothing else in the
-   * system knows how to interpret.
+   * Marks a verified user active. The **company** stays
+   * `pending_verification` — it becomes active at MFA enrolment (D-050),
+   * because that is when the owner grant lands and the tenant gains anyone who
+   * can administer it.
    */
-  async activateVerifiedUser(tx: TxScope, companyId: CompanyId, userId: UserId): Promise<void> {
-    const client = unwrapTxScope(tx);
-    await client.execute(sql`
+  async activateVerifiedUser(tx: TxScope, userId: UserId): Promise<void> {
+    await unwrapTxScope(tx).execute(sql`
       update users
-         set status = 'active', email_verified_at = now(), updated_at = now()
+         set status = 'active', email_verified_at = now()
        where id = ${userId} and email_verified_at is null
     `);
-    await client.execute(sql`
-      update companies
-         set status = 'active', updated_at = now()
+  }
+
+  async findEmail(tx: TxScope, userId: UserId): Promise<string> {
+    const result = await unwrapTxScope(tx).execute<{ email: string }>(sql`
+      select email from users where id = ${userId}
+    `);
+    return result.rows[0]?.email ?? '';
+  }
+
+  /** Stores the encrypted TOTP seed without enabling MFA yet. */
+  async storeMfaSecret(tx: TxScope, userId: UserId, secretEncrypted: string): Promise<void> {
+    await unwrapTxScope(tx).execute(sql`
+      update users set mfa_secret_encrypted = ${secretEncrypted} where id = ${userId}
+    `);
+  }
+
+  async readMfaSecret(
+    tx: TxScope,
+    userId: UserId,
+  ): Promise<{ secret: string; email: string } | undefined> {
+    const result = await unwrapTxScope(tx).execute<{ secret: string | null; email: string }>(sql`
+      select mfa_secret_encrypted as secret, email from users where id = ${userId}
+    `);
+    const row = result.rows[0];
+    if (row?.secret === null || row?.secret === undefined) return undefined;
+    return { secret: row.secret, email: row.email };
+  }
+
+  /**
+   * Flips the flag. A separate statement from the grant, and it must run
+   * first: `trg_owner_requires_mfa` reads `users.mfa_enabled` when the
+   * `user_roles` row is inserted, so this ordering is what makes the founding
+   * grant legal rather than an exemption (D-050).
+   */
+  async enableMfa(tx: TxScope, userId: UserId): Promise<void> {
+    await unwrapTxScope(tx).execute(sql`
+      update users set mfa_enabled = true where id = ${userId}
+    `);
+  }
+
+  /** Activates the company once it has an MFA-enrolled owner (D-050). */
+  async activateCompany(tx: TxScope, companyId: CompanyId): Promise<void> {
+    await unwrapTxScope(tx).execute(sql`
+      update companies set status = 'active'
        where id = ${companyId} and status = 'pending_verification'
     `);
   }

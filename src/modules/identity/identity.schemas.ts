@@ -103,3 +103,39 @@ export const VerifyEmailBody = Type.Object(
   { additionalProperties: false },
 );
 export type VerifyEmailBody = Static<typeof VerifyEmailBody>;
+
+/**
+ * MFA enrolment is two calls to one endpoint (08 §2 lists one route).
+ *
+ * No body starts enrolment and returns the secret; a body carrying `code`
+ * completes it. Two calls rather than one because enabling MFA without first
+ * proving the user can generate a code locks them out of their own account
+ * the moment MFA becomes mandatory.
+ */
+export const EnableMfaBody = Type.Union([
+  Type.Object({}, { additionalProperties: false }),
+  Type.Object(
+    { code: Type.String({ minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }) },
+    { additionalProperties: false },
+  ),
+]);
+export type EnableMfaBody = Static<typeof EnableMfaBody>;
+
+export const BeginMfaResponse = Type.Object(
+  {
+    /** Shown once. Never returned again, and never logged. */
+    secret: Type.String(),
+    /** `otpauth://…` for a QR code. */
+    uri: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
+export const CompleteMfaResponse = Type.Object(
+  {
+    mfaEnabled: Type.Literal(true),
+    /** The company activates with the founding grant (D-050). */
+    companyStatus: Type.Literal('active'),
+  },
+  { additionalProperties: false },
+);

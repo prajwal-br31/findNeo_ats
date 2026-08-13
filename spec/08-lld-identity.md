@@ -117,7 +117,7 @@ POST /v1/auth/signup
    b. `set_config('app.current_company_id', newCompanyId, true)` — **required**, or every subsequent insert fails RLS.
    c. Insert `users` (`status = 'pending'`, argon2id hash).
    d. Update `companies.owner_user_id`.
-   e. Copy platform-default roles into the company; assign `super_admin` via `user_roles`.
+   e. Copy platform-default roles into the company. **Do not grant `super_admin` yet** — see below.
    f. Seed default settings, default pipeline template, default form templates.
    g. Insert email-verification token (hashed).
    h. Enqueue `notification.send` — **in this transaction**.
@@ -126,7 +126,21 @@ POST /v1/auth/signup
 
 **The circular FK** (`companies.owner_user_id` ↔ `users.company_id`) is handled by steps (a) and (d), not a deferrable constraint.
 
-**MFA:** the owner must enable MFA before the account activates. `trg_owner_requires_mfa` blocks the role assignment otherwise, so this is enforced by the database, not by flow order.
+**MFA and the owner grant (D-050).** `trg_owner_requires_mfa` blocks granting `super_admin` to a user with `mfa_enabled = false`. Signup cannot therefore grant the role — the founding owner has not enrolled yet.
+
+**The trigger is not exempted.** An exempted security trigger is a trigger with a hole, and the founding grant is precisely the one that matters most.
+
+Instead the grant moves to the end of enrolment:
+
+```
+signup            → company 'pending_verification', user 'pending',
+                    owner_user_id set, NO role grant
+verify-email      → user 'active'
+enable-mfa        → in ONE transaction: mfa_enabled = true,
+                    grant super_admin, company → 'active'
+```
+
+A company therefore has an `owner_user_id` but no role-holder until MFA enrolment completes. That window is safe because the company is not `active` and no tenant-scoped route will serve it.
 
 ### Login
 

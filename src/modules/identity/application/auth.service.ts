@@ -71,6 +71,20 @@ export interface AuthServiceDeps {
   readonly clock: ClockPort;
   /** A real argon2 hash matching no password. See `dummyPasswordHash`. */
   readonly dummyHash: () => Promise<string>;
+  readonly mfa: MfaAdapters;
+}
+
+/**
+ * TOTP and secret encryption, injected rather than imported.
+ *
+ * `otpauth` and node crypto both live in `platform/`, so the application layer
+ * reaches them through this shape instead of importing them directly (ER-011).
+ */
+export interface MfaAdapters {
+  begin(label: string): { secret: string; uri: string };
+  verify(secret: string, label: string, code: string): boolean;
+  encrypt(plaintext: string): string;
+  decrypt(envelope: string): string;
 }
 
 /** Tokens are stored hashed and compared by hash (ER-047). */
@@ -164,7 +178,9 @@ export class AuthService {
          owner, and this is the update that fills it (06 §3). */
       await repository.setOwner(tx, companyId, userId);
 
-      await this.#grantOwnerRole(tx, companyId, userId);
+      /* No role grant here (D-050). `trg_owner_requires_mfa` blocks granting
+         super_admin to a user with mfa_enabled = false, and the founding owner
+         has not enrolled yet. The grant moves to the end of MFA enrolment. */
 
       await repository.storeVerificationToken(
         tx,
@@ -198,48 +214,72 @@ export class AuthService {
   async login(email: string, password: string, meta: RequestMeta): Promise<LoginResult> {
     const { uow, repository, hasher, clock, dummyHash } = this.#deps;
 
-    return uow.withoutTenant(async (tx: TxScope) => {
-      const user = await repository.findAuthUserByEmail(tx, email);
+    /* Starts untenanted — the tenant is not known until the email resolves —
+       and binds once it is, before the session row is written. `sessions` is
+       under FORCE RLS, so an unbound insert is rejected by the policy. */
+    const outcome = await uow.withNewTenant<LoginResult | { failedUserId: string | null }>(
+      async (tx: TxScope, bind) => {
+        const user = await repository.findAuthUserByEmail(tx, email);
 
-      /* **Always run the verification**, against a dummy hash when there is no
+        /* **Always run the verification**, against a dummy hash when there is no
          user (SEC-015). Returning early here would make a nonexistent account
          answer in a millisecond and a real one in fifty — a timing oracle that
          needs no statistics to read. */
-      const hashToCheck = user?.passwordHash ?? (await dummyHash());
-      const passwordMatches = await hasher.verify(hashToCheck, password);
+        const hashToCheck = user?.passwordHash ?? (await dummyHash());
+        const passwordMatches = await hasher.verify(hashToCheck, password);
 
-      if (user === undefined) throw authenticationFailed();
+        /* Failures RETURN rather than throw. Throwing rolls the transaction
+         back, and the lockout counter is written on exactly that path — so a
+         thrown failure silently undid its own increment and the account could
+         never lock, no matter how many attempts it took. The caller records
+         the failure in its own committed transaction and throws there. */
+        if (user === undefined) return { failedUserId: null };
 
-      /* Locked accounts still ran the hash above, and still fail the same way.
+        /* Locked accounts still ran the hash above, and still fail the same way.
          Revealing the lock tells an attacker their guessing is working, and
          tells anyone that the account exists. */
-      const lockedUntil = user.lockedUntil;
-      if (lockedUntil !== null && lockedUntil.getTime() > clock.now().getTime()) {
-        throw authenticationFailed();
-      }
+        if (isLocked(user.lockedUntil, clock.now())) return { failedUserId: null };
 
-      if (!passwordMatches) {
-        await repository.recordFailedLogin(tx, user.id, FAILED_LOGIN_THRESHOLD, LOCKOUT_MINUTES);
-        throw authenticationFailed();
-      }
+        if (!passwordMatches) return { failedUserId: user.id };
 
-      assertUsable(user);
+        if (!isUsable(user)) return { failedUserId: null };
 
-      if (user.mfaEnabled) {
-        /* 08 §3 step 6 issues a short-lived challenge here and no session. The
+        if (user.mfaEnabled) {
+          /* 08 §3 step 6 issues a short-lived challenge here and no session. The
            challenge token and POST /v1/auth/mfa/verify that consumes it are
            not in this slice, so this returns the catalog's MFA code rather
            than a challenge nothing can redeem. Failing closed: no session is
            issued either way. */
-        throw new AppError('ERR_MFA_REQUIRED', {
-          detail: 'Multi-factor authentication is required.',
-        });
-      }
+          throw new AppError('ERR_MFA_REQUIRED', {
+            detail: 'Multi-factor authentication is required.',
+          });
+        }
 
-      await repository.recordSuccessfulLogin(tx, user.id);
+        await repository.recordSuccessfulLogin(tx, user.id);
 
-      return this.#openSession(tx, user, meta);
-    });
+        await bind(unsafeCompanyId(user.companyId));
+        return this.#openSession(tx, user, meta);
+      },
+    );
+
+    if (!('failedUserId' in outcome)) return outcome;
+
+    /* A second, committed transaction. This is the one place login is
+       deliberately two transactions rather than one (08 §5): the counter has
+       to survive the failure it is counting. */
+    if (outcome.failedUserId !== null) {
+      const failedUserId = outcome.failedUserId;
+      await uow.withoutTenant(async (tx: TxScope) => {
+        await repository.recordFailedLogin(
+          tx,
+          failedUserId,
+          FAILED_LOGIN_THRESHOLD,
+          LOCKOUT_MINUTES,
+        );
+      });
+    }
+
+    throw authenticationFailed();
   }
 
   /**
@@ -265,6 +305,14 @@ export class AuthService {
     }
   }
 
+  /**
+   * The founding grant, issued at MFA enrolment (D-050).
+   *
+   * Runs after `enableMfa` in the same transaction, so `trg_owner_requires_mfa`
+   * sees `mfa_enabled = true` and permits the insert. If the flag were not set
+   * first the trigger would reject this — which is the intended behaviour, not
+   * something to work around.
+   */
   async #grantOwnerRole(tx: TxScope, companyId: CompanyId, userId: UserId): Promise<void> {
     const assigned = await this.#deps.repository.assignPlatformRole(
       tx,
@@ -291,6 +339,12 @@ export class AuthService {
     const userId = unsafeUserId(user.id);
     const refreshToken = newToken();
 
+    /* The authentication lookup deliberately does not return `full_name` — it
+       is a pre-tenant read path and returns credentials and status only. The
+       display name is read here instead, which is fine: by this point the
+       password has verified and the tenant is known. */
+    const fullName = await repository.findFullName(tx, userId);
+
     const session = await repository.insertSession(tx, {
       userId,
       companyId,
@@ -315,8 +369,64 @@ export class AuthService {
       accessToken: issued.token,
       expiresAt: issued.expiresAt,
       refreshToken,
-      user: { id: userId, email: user.email, fullName: user.fullName, companyId },
+      user: { id: userId, email: user.email, fullName, companyId },
     };
+  }
+
+  /**
+   * Completes MFA enrolment (D-050).
+   *
+   * One transaction, three effects that must not come apart:
+   *   1. `mfa_enabled = true`,
+   *   2. the founding `super_admin` grant, which the trigger permits only
+   *      because (1) already happened in this transaction, and
+   *   3. the company becomes `active`.
+   *
+   * Split across transactions, a crash between (1) and (2) leaves a tenant
+   * with an MFA-enrolled owner holding no permissions and no way to grant
+   * themselves any — an unrecoverable account, since the only role that can
+   * assign roles is the one that failed to land.
+   */
+  async enableMfa(companyId: CompanyId, userId: UserId, code: string): Promise<void> {
+    const { uow, repository, mfa } = this.#deps;
+
+    await uow.withTenant(companyId, async (tx: TxScope) => {
+      const stored = await repository.readMfaSecret(tx, userId);
+      if (stored === undefined) {
+        throw new AppError('ERR_VALIDATION_FAILED', {
+          detail: 'Start enrolment before submitting a code.',
+        });
+      }
+
+      if (!mfa.verify(mfa.decrypt(stored.secret), stored.email, code)) {
+        /* Same failure as any other authentication failure. A distinguishable
+           "wrong code" tells a shoulder-surfer their capture was close. */
+        throw authenticationFailed();
+      }
+
+      await repository.enableMfa(tx, userId);
+      await this.#grantOwnerRole(tx, companyId, userId);
+      await repository.activateCompany(tx, companyId);
+    });
+  }
+
+  /**
+   * Starts enrolment: mints a TOTP secret, stores it encrypted, and returns it
+   * once. `mfa_enabled` stays false — the secret is useless to an attacker who
+   * cannot also pass the code check, and useless to the user until they do.
+   */
+  async beginMfaEnrolment(
+    companyId: CompanyId,
+    userId: UserId,
+  ): Promise<{ secret: string; uri: string }> {
+    const { uow, repository, mfa } = this.#deps;
+
+    return uow.withTenant(companyId, async (tx: TxScope) => {
+      const email = await repository.findEmail(tx, userId);
+      const enrolment = mfa.begin(email);
+      await repository.storeMfaSecret(tx, userId, mfa.encrypt(enrolment.secret));
+      return enrolment;
+    });
   }
 
   /**
@@ -341,13 +451,24 @@ export class AuthService {
          first guessing it. */
       if (stored.tokenHash !== hashToken(token)) throw authenticationFailed();
 
-      await this.#deps.repository.activateVerifiedUser(tx, companyId, userId);
+      await this.#deps.repository.activateVerifiedUser(tx, userId);
     });
   }
 }
 
-function assertUsable(user: AuthUserRow): void {
+/**
+ * Coerced rather than trusted: the lookup goes through a set-returning
+ * function, where the driver hands `locked_until` back as a string rather than
+ * a Date. Calling `.getTime()` on it threw a TypeError, which meant the lock
+ * check never actually ran.
+ */
+function isLocked(lockedUntil: Date | string | null, now: Date): boolean {
+  if (lockedUntil === null) return false;
+  return new Date(lockedUntil).getTime() > now.getTime();
+}
+
+function isUsable(user: AuthUserRow): boolean {
   /* Unverified, suspended and deactivated accounts all produce the same
      failure as a wrong password (08 §6). Five situations, one response. */
-  if (user.status !== 'active' || user.emailVerifiedAt === null) throw authenticationFailed();
+  return user.status === 'active' && user.emailVerifiedAt !== null;
 }

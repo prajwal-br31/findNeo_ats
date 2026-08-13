@@ -3,6 +3,9 @@ import type { FastifyInstance } from 'fastify';
 
 import type { AuthController } from './auth.controller.js';
 import {
+  BeginMfaResponse,
+  CompleteMfaResponse,
+  EnableMfaBody,
   LoginBody,
   LoginResponse,
   SignupBody,
@@ -29,6 +32,11 @@ export interface IdentityRouteOptions {
   readonly devEmailReader?: () => unknown;
   /** Sets the refresh cookie. Injected so the module owns no cookie policy. */
   readonly setRefreshCookie: (reply: unknown, token: string) => void;
+  /**
+   * Reads the authenticated caller off the request. Injected so the module
+   * does not depend on how authentication is carried (ER-004).
+   */
+  readonly currentUser: (request: unknown) => { companyId: string; userId: string };
   /**
    * Called with the freshly issued verification token. Bootstrap points this
    * at the development outbox; in every other environment it is undefined and
@@ -173,8 +181,47 @@ function registerDevEmail(app: FastifyInstance, options: IdentityRouteOptions): 
   }
 }
 
+function registerEnableMfa(app: FastifyInstance, options: IdentityRouteOptions): void {
+  const { controller, currentUser } = options;
+
+  app.post(
+    '/v1/users/current/actions/enable-mfa',
+    {
+      config: {
+        /* Authenticated, but no permission: acting on your own account is not
+           something a role grants you (08 §2). */
+        findneo: { permission: 'self' },
+      },
+      schema: {
+        tags: ['auth'],
+        summary: 'Begin MFA enrolment (no body), or complete it with a code',
+        security: [{ bearerAuth: [] }],
+        body: EnableMfaBody,
+        response: { 200: BeginMfaResponse, 201: CompleteMfaResponse },
+      },
+    },
+    async (request, reply) => {
+      const { companyId, userId } = currentUser(request);
+      const body = request.body as { code?: string } | undefined;
+
+      if (body?.code === undefined) {
+        const enrolment = await controller.beginMfa(companyId, userId);
+        await reply.status(200).send(enrolment);
+        return;
+      }
+
+      /* Completing enrolment is what grants super_admin and activates the
+         company (D-050) — the one transaction that turns a pending signup
+         into a usable tenant. */
+      await controller.completeMfa(companyId, userId, body.code);
+      await reply.status(201).send({ mfaEnabled: true, companyStatus: 'active' });
+    },
+  );
+}
+
 export function registerIdentityRoutes(app: FastifyInstance, options: IdentityRouteOptions): void {
   registerSignup(app, options);
+  registerEnableMfa(app, options);
   registerLogin(app, options);
   registerVerifyEmail(app, options);
   registerDevEmail(app, options);

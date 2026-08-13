@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
-import { importPKCS8, SignJWT, type KeyLike } from 'jose';
+import { importPKCS8, importSPKI, jwtVerify, SignJWT, type KeyLike } from 'jose';
 
 import type { ClockPort } from '../../shared/ports/clock.js';
 import type {
   AccessTokenClaims,
   IssuedAccessToken,
   TokenIssuerPort,
+  TokenVerifierPort,
+  VerifiedClaims,
 } from '../../shared/ports/token-issuer.js';
 
 /**
@@ -63,5 +65,42 @@ export class JwtTokenIssuer implements TokenIssuerPort {
       .sign(await this.#signingKey());
 
     return { token, expiresAt };
+  }
+}
+
+export class JwtTokenVerifier implements TokenVerifierPort {
+  readonly #publicKeyPem: string;
+  #key: KeyLike | undefined;
+
+  constructor(publicKeyPem: string) {
+    this.#publicKeyPem = publicKeyPem;
+  }
+
+  async verifyAccessToken(token: string): Promise<VerifiedClaims | undefined> {
+    try {
+      this.#key ??= await importSPKI(this.#publicKeyPem, ACCESS_TOKEN_ALGORITHM);
+
+      const { payload } = await jwtVerify(token, this.#key, {
+        /* The algorithm is pinned here, not read from the token header. A
+           verifier that accepts whatever `alg` the token claims is the
+           algorithm-confusion bug — `none`, or HMAC verified against the
+           public key as its secret. This is the single most important line in
+           the file. */
+        algorithms: [ACCESS_TOKEN_ALGORITHM],
+        issuer: ISSUER,
+        audience: AUDIENCE,
+      });
+
+      const { sub, sid, cid, cap } = payload as Record<string, unknown>;
+      if (typeof sub !== 'string' || typeof sid !== 'string' || typeof cap !== 'number') {
+        return undefined;
+      }
+      return { sub, sid, cid: typeof cid === 'string' ? cid : null, cap };
+    } catch {
+      /* Expired, malformed, wrong issuer, bad signature — all the same answer.
+         Distinguishing them tells an attacker which part of a forged token to
+         fix next. */
+      return undefined;
+    }
   }
 }

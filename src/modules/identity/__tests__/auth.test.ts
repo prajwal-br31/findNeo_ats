@@ -8,6 +8,8 @@ import {
   dummyPasswordHash,
 } from '../../../platform/crypto/argon2-password-hasher.js';
 import { JwtTokenIssuer } from '../../../platform/crypto/jwt-token-issuer.js';
+import { SecretBox } from '../../../platform/crypto/secret-box.js';
+import { beginTotpEnrolment, verifyTotp } from '../../../platform/crypto/totp.js';
 import { createUnitOfWork, type UnitOfWorkHandle } from '../../../platform/db/unit-of-work.js';
 import { FakeQueue } from '../../../testing/fakes/fake-queue.js';
 import { seedTwoTenants, type TwoTenants } from '../../../testing/harness/seed-two-tenants.js';
@@ -33,6 +35,7 @@ MC4CAQAwBQYDK2VwBCIEIB2jQ2CQhFTL7hHCoBmqUCFAr0uJ8CV7cCE1zM1nGBLd
 -----END PRIVATE KEY-----`;
 
 const PASSWORD = 'correct-horse-battery-staple';
+const secretBox = new SecretBox('pN3ZbXao7X+YfD03iBVQikHL+MAqsjzpes7e0XIBVjU=');
 
 async function ownerClient(): Promise<Client> {
   const client = new Client({ connectionString: database.ownerUrl });
@@ -56,6 +59,12 @@ beforeAll(async () => {
     queue: new FakeQueue(),
     clock,
     dummyHash: () => dummyPasswordHash(hasher),
+    mfa: {
+      begin: (label) => beginTotpEnrolment(label),
+      verify: (secret, label, code) => verifyTotp(secret, label, code),
+      encrypt: (plaintext) => secretBox.encrypt(plaintext),
+      decrypt: (envelope) => secretBox.decrypt(envelope),
+    },
   });
 }, 240_000);
 
@@ -84,7 +93,7 @@ async function signupFixture(
 }
 
 describe('T-024: signup is one transaction', () => {
-  it('creates the company, the owner, and the owner role together', async () => {
+  it('creates the company and its owner, and grants no role yet (D-050)', async () => {
     const { companyId, userId } = await signupFixture('gamma-co', 'owner@gamma.test');
 
     const client = await ownerClient();
@@ -101,7 +110,11 @@ describe('T-024: signup is one transaction', () => {
          visible, never a step later. */
       expect(rows[0]?.owner).toBe(userId);
       expect(rows[0]?.status).toBe('pending_verification');
-      expect(Number(rows[0]?.roles)).toBe(1);
+
+      /* No role grant at signup (D-050). `trg_owner_requires_mfa` blocks
+         super_admin for a user without MFA, and the trigger is deliberately
+         not exempted — the grant moves to the end of enrolment instead. */
+      expect(Number(rows[0]?.roles)).toBe(0);
     } finally {
       await client.end();
     }
@@ -241,6 +254,12 @@ describe('SEC-015: uniform timing', () => {
       queue: new FakeQueue(),
       clock,
       dummyHash: () => dummyPasswordHash(hasher),
+      mfa: {
+        begin: (label) => beginTotpEnrolment(label),
+        verify: (secret, label, code) => verifyTotp(secret, label, code),
+        encrypt: (plaintext) => secretBox.encrypt(plaintext),
+        decrypt: (envelope) => secretBox.decrypt(envelope),
+      },
     });
 
     await probe
