@@ -10,6 +10,10 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "dev:api": "node --env-file-if-exists=.env --import tsx --watch src/main-api.ts",
+    "dev:worker": "node --env-file-if-exists=.env --import tsx --watch src/main-worker.ts",
+    "start:api": "node --env-file-if-exists=.env dist/main-api.js",
+    "start:worker": "node --env-file-if-exists=.env dist/main-worker.js",
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

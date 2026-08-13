@@ -27,6 +27,10 @@ const ELEMENTS = [
   { type: 'testing', pattern: 'src/testing', mode: 'folder' },
 
   { type: 'bootstrap', pattern: 'src/bootstrap', mode: 'folder' },
+  /* The two process entrypoints (D-003). Classified as bootstrap because that
+     is what they are — composition roots — rather than left unmatched, which
+     would silently exempt them from the matrix entirely. */
+  { type: 'bootstrap', pattern: 'src/main-*.ts', mode: 'full' },
   { type: 'bff', pattern: 'src/bff/*', mode: 'folder', capture: ['client'] },
 
   /* The database client is its own element so it can be denied to the BFF,
