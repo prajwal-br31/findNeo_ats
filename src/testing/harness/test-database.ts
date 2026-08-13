@@ -9,17 +9,22 @@ import { assertTestDatabaseName } from '../../platform/config/database-url.js';
  *
  *   once per run   build `findneo_template_test`: clone the prepared base,
  *                  apply migrations as the owner
- *   per test       CREATE DATABASE … TEMPLATE … OWNER findneo_migrator
- *   after test     DROP, by the owner
+ *   per test       CREATE DATABASE … TEMPLATE …, owned by the creating role
+ *   after test     DROP, by that same role
  *
  * Three roles, because no one role may hold all three capabilities:
- *   findneo_test_runner  CREATEDB — creates databases; dev and CI only
- *   findneo_migrator     owns and migrates them, and so may drop them
+ *   findneo_test_runner  CREATEDB — creates, owns and drops the databases
+ *   findneo_migrator     migrates them; owns every TABLE inside
  *   findneo_app          what assertions run as; owns nothing, so FORCE bites
  *
- * `findneo_test_runner` cannot drop what it creates, because the clones are
- * owned by the migrator. That is not an oversight — DROP DATABASE requires
- * ownership, so the capability stays split.
+ * The runner owns the databases outright (D-048a, amended). Assigning
+ * ownership to another role would require membership in it, and membership in
+ * `findneo_migrator` is the one thing that must never exist — `SET ROLE` would
+ * reach `BYPASSRLS` from a role not supposed to have it.
+ *
+ * Database ownership and table ownership are separate. Table ownership inside
+ * the clone stays with `findneo_migrator`, and that is what makes
+ * `FORCE ROW LEVEL SECURITY` behave exactly as it does in production.
  *
  * Every database name this module creates or drops ends in `_test` and is
  * checked before the statement runs (D-046). The harness drops databases; a
@@ -27,7 +32,6 @@ import { assertTestDatabaseName } from '../../platform/config/database-url.js';
  */
 
 const TEMPLATE_DATABASE = 'findneo_template_test';
-const MAINTENANCE_DATABASE = 'postgres';
 const MIGRATIONS_FOLDER = 'drizzle';
 
 export class HarnessError extends Error {
@@ -108,9 +112,10 @@ async function disconnectEveryoneFrom(client: Client, database: string): Promise
   );
 }
 
-async function dropDatabase(ownerAdminUrl: string, database: string): Promise<void> {
-  assertTestDatabaseName(withDatabase(ownerAdminUrl, database), `drop ${database}`);
-  await withClient(ownerAdminUrl, async (client) => {
+/** The runner owns what it creates, so it can drop it — no SET ROLE. */
+async function dropDatabase(runnerUrl: string, database: string): Promise<void> {
+  assertTestDatabaseName(withDatabase(runnerUrl, database), `drop ${database}`);
+  await withClient(runnerUrl, async (client) => {
     await disconnectEveryoneFrom(client, database);
     await execDatabaseStatement(client, 'DROP DATABASE IF EXISTS %I', [database]);
   });
@@ -132,15 +137,14 @@ export async function buildTemplateDatabase(): Promise<void> {
   assertTestDatabaseName(ownerUrl, 'DATABASE_URL_TEST_OWNER');
   assertTestDatabaseName(withDatabase(ownerUrl, TEMPLATE_DATABASE), 'template database');
 
-  const ownerAdminUrl = withDatabase(ownerUrl, MAINTENANCE_DATABASE);
-  await dropDatabase(ownerAdminUrl, TEMPLATE_DATABASE);
+  await dropDatabase(runnerUrl, TEMPLATE_DATABASE);
 
   await withClient(runnerUrl, async (client) => {
     await disconnectEveryoneFrom(client, baseDatabase);
-    await execDatabaseStatement(client, 'CREATE DATABASE %I TEMPLATE %I OWNER %I', [
+    // No OWNER clause: the creating role owns it, which is the point.
+    await execDatabaseStatement(client, 'CREATE DATABASE %I TEMPLATE %I', [
       TEMPLATE_DATABASE,
       baseDatabase,
-      'findneo_migrator',
     ]);
   });
 
@@ -177,32 +181,25 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   const name = `findneo_c${suffix}_test`;
   assertTestDatabaseName(withDatabase(ownerUrl, name), 'clone database');
 
-  const ownerAdminUrl = withDatabase(ownerUrl, MAINTENANCE_DATABASE);
-
   await withClient(runnerUrl, async (client) => {
     await disconnectEveryoneFrom(client, TEMPLATE_DATABASE);
-    await execDatabaseStatement(client, 'CREATE DATABASE %I TEMPLATE %I OWNER %I', [
+    await execDatabaseStatement(client, 'CREATE DATABASE %I TEMPLATE %I', [
       name,
       TEMPLATE_DATABASE,
-      'findneo_migrator',
     ]);
   });
 
-  /* A clone does not inherit the source database's own ACL — only its
-     contents — so CONNECT is re-granted here. Table grants came with the copy. */
-  await withClient(withDatabase(ownerUrl, name), async (client) => {
-    await execDatabaseStatement(client, 'REVOKE ALL ON DATABASE %I FROM PUBLIC', [name]);
-    for (const role of ['findneo_app', 'findneo_public', 'findneo_platform']) {
-      await execDatabaseStatement(client, 'GRANT CONNECT ON DATABASE %I TO %I', [name, role]);
-    }
-  });
+  /* No database-level ACL fixup. Table and schema privileges travel with the
+     copy, and those are what every test asserts on; only the database's own
+     ACL is not copied, and nothing depends on it. Leaving the default also
+     keeps the migrator and app able to connect without another round trip. */
 
   return {
     name,
     appUrl: withDatabase(appUrl, name),
     ownerUrl: withDatabase(ownerUrl, name),
     drop: async (): Promise<void> => {
-      await dropDatabase(ownerAdminUrl, name);
+      await dropDatabase(runnerUrl, name);
     },
   };
 }

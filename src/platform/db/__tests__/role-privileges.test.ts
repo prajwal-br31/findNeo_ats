@@ -102,8 +102,23 @@ describe('role membership is not a back door', () => {
     return result.rows[0]?.member ?? false;
   }
 
-  it('findneo_test_runner is a member of findneo_migrator, as CREATE DATABASE … OWNER requires', async () => {
-    expect(await isMemberOf('findneo_test_runner', 'findneo_migrator')).toBe(true);
+  it('NO role is a member of findneo_migrator (D-048a, amended)', async () => {
+    /* The stronger position, and available only because the test runner owns
+       its clones outright. Assigning ownership elsewhere would have required
+       membership, and membership is the back door: SET ROLE reaches
+       BYPASSRLS from a role that is not supposed to have it. */
+    const result = await ownerPool.query<{ member: string }>(
+      `SELECT r.rolname AS member
+         FROM pg_auth_members m
+         JOIN pg_roles r ON r.oid = m.member
+         JOIN pg_roles g ON g.oid = m.roleid
+        WHERE g.rolname = 'findneo_migrator'`,
+    );
+    expect(result.rows.map((row) => row.member)).toEqual([]);
+  });
+
+  it('findneo_test_runner is NOT a member of findneo_migrator', async () => {
+    expect(await isMemberOf('findneo_test_runner', 'findneo_migrator')).toBe(false);
   });
 
   it.each(['findneo_app', 'findneo_public', 'findneo_platform'])(

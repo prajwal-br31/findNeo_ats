@@ -598,7 +598,15 @@ Without it, an untenanted query on a warm pool is a 500 rather than zero rows. I
 
 **(a) A fourth, test-only role.** Template cloning needs `CREATEDB`. `findneo_migrator` is `NOCREATEDB` by design, and unlike `BYPASSRLS` (D-047b) this is **not** self-grantable by an owner — so that decision's reasoning does not transfer.
 
-`findneo_test_runner` holds `CREATEDB` and exists only in development and CI provisioning. It creates per-test databases; `findneo_migrator` still owns them. Production role definitions are untouched, and the isolation suite asserts no production role holds `CREATEDB`.
+`findneo_test_runner` holds `CREATEDB` and exists only in development and CI provisioning. **It owns the per-test databases outright.**
+
+**Amended.** An earlier draft said the migrator owned the clones. That was incidental wording, and it was wrong to state: PostgreSQL requires the creating role to be a *member* of the owning role to assign ownership elsewhere, so it forced a `GRANT findneo_migrator TO findneo_test_runner`. That is strictly more privilege than anything needs.
+
+Database ownership and table ownership are separate. **Table** ownership inside the clone stays with `findneo_migrator`, and table ownership is what makes `FORCE ROW LEVEL SECURITY` behave as it does in production. Database ownership affects nothing the tests depend on.
+
+**Isolation suite assertions:**
+- No production role holds `CREATEDB`.
+- **No role is a member of `findneo_migrator`** — read from `pg_has_role`, never assumed. Membership would let a serving role reach `BYPASSRLS` via `SET ROLE`, which is the single capability the tenant model depends on withholding.
 
 **Rejected: transaction-rollback isolation.** Faster and privilege-free, but the concurrency tests commit — and those tests have already caught two real defects. A harness that cannot test committed state cannot test what most needs testing.
 

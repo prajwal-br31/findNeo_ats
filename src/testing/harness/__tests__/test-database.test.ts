@@ -57,13 +57,26 @@ describe('template database', () => {
 });
 
 describe('per-test clones', () => {
-  it('are owned by findneo_migrator, not by the role that created them', async () => {
+  it('are owned by the role that created them — no SET ROLE needed (D-048a)', async () => {
     const clone = await createTestDatabase();
     clones.push(clone);
 
     const row = await queryOne<{ owner: string }>(
       clone.ownerUrl,
       'SELECT pg_get_userbyid(datdba) AS owner FROM pg_database WHERE datname = current_database()',
+    );
+    expect(row.owner).toBe('findneo_test_runner');
+  });
+
+  it('contain tables still owned by findneo_migrator — what FORCE RLS keys on', async () => {
+    const clone = await createTestDatabase();
+    clones.push(clone);
+
+    /* Database ownership and table ownership are separate. The runner owning
+       the database changes nothing about RLS; table ownership is what does. */
+    const row = await queryOne<{ owner: string }>(
+      clone.ownerUrl,
+      "SELECT tableowner AS owner FROM pg_tables WHERE tablename = '__drizzle_migrations'",
     );
     expect(row.owner).toBe('findneo_migrator');
   });

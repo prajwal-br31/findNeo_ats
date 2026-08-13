@@ -32,36 +32,20 @@ import { resolve } from 'node:path';
 
 import { Client } from 'pg';
 
+import {
+  ALL_ROLES,
+  DEV_DATABASE,
+  MIGRATOR_ROLE,
+  PROVISIONED_ROLES,
+  TEST_DATABASE,
+  TEST_RUNNER_ROLE,
+  roleAttributes,
+  type RoleName,
+} from './lib/roles.js';
+
 const MINIMUM_SERVER_VERSION_NUM = 180_000; // PostgreSQL 18 (D-018, D-032)
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const ENV_PATH = resolve(REPO_ROOT, '.env');
-
-const DEV_DATABASE = 'findneo_dev';
-const TEST_DATABASE = 'findneo_test';
-
-/** Owns every table. Never serves traffic (06 §2). */
-const MIGRATOR_ROLE = 'findneo_migrator';
-/** The three traffic roles, named in 06 §2. None owns anything. */
-const TRAFFIC_ROLES = ['findneo_app', 'findneo_public', 'findneo_platform'] as const;
-
-/**
- * Test provisioning only (D-048a, 11 §2). Holds CREATEDB so the harness can
- * clone a template database per test. `findneo_migrator` is NOCREATEDB by
- * design and — unlike BYPASSRLS, which an owner can grant itself — CREATEDB is
- * not self-grantable, so that exemption does not transfer.
- *
- * This role must never exist in a production provisioning path. The isolation
- * suite asserts no production role holds CREATEDB.
- */
-const TEST_RUNNER_ROLE = 'findneo_test_runner';
-
-type RoleName = typeof MIGRATOR_ROLE | typeof TEST_RUNNER_ROLE | (typeof TRAFFIC_ROLES)[number];
-
-/** Roles that exist in every environment. */
-const ALL_ROLES: readonly RoleName[] = [MIGRATOR_ROLE, ...TRAFFIC_ROLES];
-
-/** Everything the local development cluster needs, tests included. */
-const PROVISIONED_ROLES: readonly RoleName[] = [...ALL_ROLES, TEST_RUNNER_ROLE];
 
 function generateSecret(bytes: number): string {
   // base64url: [A-Za-z0-9_-] only, so it needs no escaping inside a URL.
@@ -161,21 +145,6 @@ async function assertServerVersion(client: Client): Promise<void> {
 }
 
 /**
- * Exactly one capability each, and the isolation suite asserts every one of
- * these against `pg_roles` rather than trusting this function.
- *
- *   migrator    BYPASSRLS  — owner is subject to FORCE; seeds would be denied (D-047b)
- *   test runner CREATEDB   — clones a template per test; dev and CI only (D-048a)
- *   traffic     neither
- */
-function roleAttributes(role: RoleName): string {
-  const base = 'LOGIN NOSUPERUSER NOCREATEROLE NOINHERIT';
-  if (role === MIGRATOR_ROLE) return `${base} NOCREATEDB BYPASSRLS`;
-  if (role === TEST_RUNNER_ROLE) return `${base} CREATEDB NOBYPASSRLS`;
-  return `${base} NOCREATEDB NOBYPASSRLS`;
-}
-
-/**
  * Creates the role if absent and applies its attributes. Never touches the
  * password, so this is safe to re-run against a live `.env` (`--roles-only`).
  */
@@ -200,22 +169,27 @@ async function ensureRole(client: Client, role: RoleName, rolesOnly = false): Pr
 }
 
 /**
- * `CREATEDB` alone is not enough to create a database owned by someone else.
+ * Nobody is a member of the migrator (D-048a, amended).
  *
- * PostgreSQL requires the creating role to be a member of the owning role:
- * "must be able to SET ROLE findneo_migrator". D-048a puts ownership of the
- * clones with the migrator, so the runner needs membership to hand it over.
+ * An earlier design had the runner create clones `OWNER findneo_migrator`,
+ * which PostgreSQL only permits to a *member* of that role. The runner now
+ * owns its clones outright, so the membership is unnecessary — and membership
+ * in the migrator is precisely what must never exist, because `SET ROLE` would
+ * reach `BYPASSRLS` from a role not supposed to have it.
  *
- * The runner is `NOINHERIT`, so this grants no ambient privilege — it cannot
- * quietly act as the migrator, it must `SET ROLE` deliberately. The isolation
- * suite asserts no production role holds this membership.
+ * Revoked rather than merely not granted, so a cluster provisioned under the
+ * earlier design is corrected by re-running. Revoking what was never granted
+ * is a no-op.
  */
-async function grantMigratorMembership(client: Client): Promise<void> {
-  await execFormatted(client, `GRANT ${MIGRATOR_ROLE} TO ${TEST_RUNNER_ROLE}`, 'GRANT %I TO %I', [
-    MIGRATOR_ROLE,
-    TEST_RUNNER_ROLE,
-  ]);
-  process.stdout.write(`  membership         ${TEST_RUNNER_ROLE} -> ${MIGRATOR_ROLE}\n`);
+async function revokeMigratorMembership(client: Client): Promise<void> {
+  await execFormatted(
+    client,
+    `REVOKE ${MIGRATOR_ROLE} FROM ${TEST_RUNNER_ROLE}`,
+    'REVOKE %I FROM %I',
+    [MIGRATOR_ROLE, TEST_RUNNER_ROLE],
+  );
+  process.stdout.write(`  membership         none in ${MIGRATOR_ROLE} (revoked if present)
+`);
 }
 
 async function setRolePassword(client: Client, role: RoleName, password: string): Promise<void> {
@@ -384,7 +358,7 @@ async function provisionCluster(
       await ensureRole(admin, role, rolesOnly);
       if (!rolesOnly) await setRolePassword(admin, role, passwords.get(role) ?? '');
     }
-    await grantMigratorMembership(admin);
+    await revokeMigratorMembership(admin);
     for (const database of [DEV_DATABASE, TEST_DATABASE]) await ensureDatabase(admin, database);
   } finally {
     await admin.end();
