@@ -29,6 +29,15 @@ rules:
       - pattern: sql.raw(...)
       - pattern: $C.query($A + $B, ...)
       - pattern: $C.execute($A + $B, ...)
+      # Textual backstop for the structural patterns above.
+      #
+      # `await client.query<Row>(`…${x}…`)` — an awaited call carrying an
+      # explicit type argument — is NOT matched by `$C.query($SQL, ...)`.
+      # Either construct alone matches; together they do not. That is the most
+      # idiomatic shape in this codebase (`await tx.execute<Row>(sql`…`)`), so
+      # the structural pattern alone left the common case uncovered. Found when
+      # scripts/setup-dev-db.ts built SQL by interpolation and scanned clean.
+      - pattern-regex: \.(query|execute|unsafe|raw)\s*(<[^<>()]*>)?\s*\(\s*`[^`]*\$\{
 
   # 2 ── ER-006
   - id: findneo-database-access-outside-repository

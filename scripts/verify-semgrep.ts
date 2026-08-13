@@ -36,6 +36,11 @@ const EXPECTED: ReadonlyArray<{ file: string; rule: string; why: string }> = [
     why: 'ER-031 — SQL built by interpolation',
   },
   {
+    file: 'src/modules/example/infrastructure/rule1-await-generic.ts',
+    rule: 'findneo-raw-sql-interpolation',
+    why: 'ER-031 — awaited call with a generic type argument (regression)',
+  },
+  {
     file: 'src/modules/example/application/rule2-db-outside-repository.ts',
     rule: 'findneo-database-access-outside-repository',
     why: 'ER-006 — ORM call outside a repository',

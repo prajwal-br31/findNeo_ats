@@ -10,10 +10,13 @@
  *
  * Run it yourself — it needs a PostgreSQL superuser connection:
  *
- *   $env:PGPASSWORD = '<your postgres password>'   # PowerShell
+ *   $env:PGUSER = 'postgres'                       # PowerShell
+ *   $env:PGPASSWORD = '<your postgres password>'
  *   pnpm db:setup
  *
  * Standard libpq variables are honoured: PGHOST, PGPORT, PGUSER, PGPASSWORD.
+ * PGUSER is not optional on Windows — `pg` defaults it to the Windows account
+ * name, not to `postgres`, so leaving it unset fails as an unknown role.
  * No password is ever read from, or written to, a file by this script.
  *
  * SQL construction note: PostgreSQL cannot bind identifiers or role passwords
@@ -61,20 +64,66 @@ function generateJwtKeypairBase64(): { privateKey: string; publicKey: string } {
   };
 }
 
-/** Has PostgreSQL build and run a statement, so it does the quoting. */
+/** Reports which statement failed, rather than only the driver's message. */
+export class SetupStepError extends Error {
+  constructor(step: string, cause: unknown) {
+    super(`${step}\n  ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'SetupStepError';
+  }
+}
+
+/**
+ * Fixed-arity builders, one literal string each.
+ *
+ * `format()` takes `VARIADIC "any"`, so a bare `$2` has no inferable type and
+ * PostgreSQL rejects the statement with "could not determine data type of
+ * parameter $2". The `::text` casts are what make the bind parameters usable.
+ *
+ * Written out rather than assembled from a placeholder list: building SQL by
+ * interpolation is forbidden (ER-031) even when the interpolated text is only
+ * `$2, $3`, and the earlier version of this file that did so was missed by
+ * Semgrep rule 1 — see the regex arm added to that rule.
+ */
+const FORMAT_QUERIES = [
+  'SELECT format($1) AS sql',
+  'SELECT format($1, $2::text) AS sql',
+  'SELECT format($1, $2::text, $3::text) AS sql',
+] as const;
+
+/**
+ * Has PostgreSQL build the statement and then runs it.
+ *
+ * Identifiers and role passwords cannot be bind parameters, and interpolating
+ * them client-side is prohibited (AGENTS.md §3.2). `format('%I'/'%L', …)` with
+ * the values sent as parameters puts all quoting inside the database.
+ */
 async function execFormatted(
   client: Client,
+  step: string,
   template: string,
   params: readonly string[],
 ): Promise<void> {
-  const placeholders = params.map((_, index) => `$${String(index + 2)}`).join(', ');
-  const built = await client.query<{ sql: string }>(
-    `SELECT format($1${placeholders === '' ? '' : `, ${placeholders}`}) AS sql`,
-    [template, ...params],
-  );
-  const sql = built.rows[0]?.sql;
-  if (sql === undefined) throw new Error('could not build statement');
-  await client.query(sql);
+  const builder = FORMAT_QUERIES[params.length];
+  if (builder === undefined) {
+    throw new SetupStepError(step, `unsupported parameter count ${String(params.length)}`);
+  }
+  try {
+    const built = await client.query<{ sql: string }>(builder, [template, ...params]);
+    const sql = built.rows[0]?.sql;
+    if (sql === undefined) throw new Error('format() returned no statement');
+    await client.query(sql);
+  } catch (error) {
+    throw new SetupStepError(step, error);
+  }
+}
+
+/** A statement with no parameters. Literal SQL only. */
+async function exec(client: Client, step: string, sql: string): Promise<void> {
+  try {
+    await client.query(sql);
+  } catch (error) {
+    throw new SetupStepError(step, error);
+  }
 }
 
 async function connect(database: string): Promise<Client> {
@@ -98,11 +147,14 @@ async function assertServerVersion(client: Client): Promise<void> {
 
 async function ensureRole(client: Client, role: RoleName, password: string): Promise<void> {
   const existing = await client.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [role]);
-  const template =
-    existing.rowCount === 0
-      ? 'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L'
-      : 'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L';
-  await execFormatted(client, template, [role, password]);
+  const creating = existing.rowCount === 0;
+  const template = creating
+    ? 'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L'
+    : 'ALTER ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L';
+  await execFormatted(client, `${creating ? 'CREATE' : 'ALTER'} ROLE ${role}`, template, [
+    role,
+    password,
+  ]);
   process.stdout.write(
     `  role ${role.padEnd(18)} ${existing.rowCount === 0 ? 'created' : 'updated'}\n`,
   );
@@ -111,13 +163,39 @@ async function ensureRole(client: Client, role: RoleName, password: string): Pro
 async function ensureDatabase(client: Client, database: string): Promise<void> {
   const existing = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [database]);
   if (existing.rowCount === 0) {
-    await execFormatted(client, 'CREATE DATABASE %I OWNER %I', [database, MIGRATOR_ROLE]);
+    await execFormatted(client, `CREATE DATABASE ${database}`, 'CREATE DATABASE %I OWNER %I', [
+      database,
+      MIGRATOR_ROLE,
+    ]);
   } else {
-    await execFormatted(client, 'ALTER DATABASE %I OWNER TO %I', [database, MIGRATOR_ROLE]);
+    await execFormatted(
+      client,
+      `ALTER DATABASE ${database} OWNER`,
+      'ALTER DATABASE %I OWNER TO %I',
+      [database, MIGRATOR_ROLE],
+    );
   }
   process.stdout.write(
     `  database ${database.padEnd(14)} ${existing.rowCount === 0 ? 'created' : 'exists'}\n`,
   );
+}
+
+/** Every role may reach the database and see the schema; nothing more. */
+async function grantConnectAndUsage(client: Client, database: string): Promise<void> {
+  for (const role of ALL_ROLES) {
+    await execFormatted(
+      client,
+      `GRANT CONNECT ON ${database} TO ${role}`,
+      'GRANT CONNECT ON DATABASE %I TO %I',
+      [database, role],
+    );
+    await execFormatted(
+      client,
+      `GRANT USAGE ON SCHEMA public TO ${role} (${database})`,
+      'GRANT USAGE ON SCHEMA public TO %I',
+      [role],
+    );
+  }
 }
 
 /**
@@ -129,14 +207,29 @@ async function ensureDatabase(client: Client, database: string): Promise<void> {
 async function prepareDatabase(database: string): Promise<void> {
   const client = await connect(database);
   try {
-    await client.query('CREATE EXTENSION IF NOT EXISTS citext');
-    await execFormatted(client, 'REVOKE CREATE ON SCHEMA public FROM PUBLIC', []);
-    await execFormatted(client, 'REVOKE ALL ON DATABASE %I FROM PUBLIC', [database]);
-    for (const role of ALL_ROLES) {
-      await execFormatted(client, 'GRANT CONNECT ON DATABASE %I TO %I', [database, role]);
-      await execFormatted(client, 'GRANT USAGE ON SCHEMA public TO %I', [role]);
-    }
-    await execFormatted(client, 'GRANT CREATE ON SCHEMA public TO %I', [MIGRATOR_ROLE]);
+    await exec(
+      client,
+      `CREATE EXTENSION citext (${database})`,
+      'CREATE EXTENSION IF NOT EXISTS citext',
+    );
+    await exec(
+      client,
+      `REVOKE CREATE ON SCHEMA public (${database})`,
+      'REVOKE CREATE ON SCHEMA public FROM PUBLIC',
+    );
+    await execFormatted(
+      client,
+      `REVOKE ALL ON DATABASE ${database} FROM PUBLIC`,
+      'REVOKE ALL ON DATABASE %I FROM PUBLIC',
+      [database],
+    );
+    await grantConnectAndUsage(client, database);
+    await execFormatted(
+      client,
+      `GRANT CREATE ON SCHEMA public TO ${MIGRATOR_ROLE} (${database})`,
+      'GRANT CREATE ON SCHEMA public TO %I',
+      [MIGRATOR_ROLE],
+    );
   } finally {
     await client.end();
   }
@@ -234,15 +327,24 @@ async function main(): Promise<void> {
   );
 }
 
+/**
+ * `pg` does not read `.pgpass` and does not default `PGUSER` to `postgres` —
+ * on Windows it falls back to the Windows account name, so an unset PGUSER
+ * produces an authentication failure naming a user nobody created.
+ */
+const CONNECTION_HELP =
+  'Set BOTH variables for this shell, then re-run:\n' +
+  "  $env:PGUSER = 'postgres'\n" +
+  "  $env:PGPASSWORD = '<postgres superuser password>'\n" +
+  '  pnpm db:setup\n\n' +
+  `PGUSER currently resolves to "${process.env['PGUSER'] ?? '(unset — defaults to your Windows account name)'}".\n` +
+  'Optional: PGHOST (default localhost), PGPORT (default 5432).\n';
+
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`\nSetup failed: ${message}\n\n`);
-  if (message.includes('password') || message.includes('authentication')) {
-    process.stderr.write(
-      'Set a superuser password for this shell first, then re-run:\n' +
-        "  $env:PGPASSWORD = '<postgres password>'\n" +
-        '  pnpm db:setup\n',
-    );
+  process.stderr.write(`\nSetup failed at: ${message}\n\n`);
+  if (/password|authentication|role .* does not exist|SASL/i.test(message)) {
+    process.stderr.write(CONNECTION_HELP);
   }
   process.exitCode = 1;
 });

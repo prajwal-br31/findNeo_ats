@@ -45,11 +45,13 @@ Then create the databases, roles, and your `.env`. This step needs a PostgreSQL 
 pnpm db:setup
 ```
 
-PowerShell:
+PowerShell — set **both** variables:
 
 ```bash
-$env:PGPASSWORD = '<your postgres superuser password>'; pnpm db:setup
+$env:PGUSER = 'postgres'; $env:PGPASSWORD = '<your postgres superuser password>'; pnpm db:setup
 ```
+
+`PGUSER` is not optional on Windows: `pg` defaults it to your Windows account name rather than to `postgres`, so leaving it unset fails as an unknown role. `PGHOST` and `PGPORT` default to `localhost:5432`.
 
 It is safe to re-run: if `.env` already exists the script refuses and touches nothing. Pass `--force` to regenerate (this rotates the role passwords and rewrites `.env`).
 
