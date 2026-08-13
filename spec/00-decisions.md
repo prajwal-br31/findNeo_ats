@@ -598,7 +598,15 @@ Without it, an untenanted query on a warm pool is a 500 rather than zero rows. I
 
 **(a) A fourth, test-only role.** Template cloning needs `CREATEDB`. `findneo_migrator` is `NOCREATEDB` by design, and unlike `BYPASSRLS` (D-047b) this is **not** self-grantable by an owner — so that decision's reasoning does not transfer.
 
-`findneo_test_runner` holds `CREATEDB` and exists only in development and CI provisioning. **It owns the per-test databases outright.**
+`findneo_test_runner` holds `CREATEDB` and exists only in development and CI provisioning. **It owns the template database and every per-test clone outright.**
+
+**The template must be owned by the runner, not only the clones.** PostgreSQL requires the creating role to own a database in order to copy it as a `TEMPLATE`. Provisioning therefore includes:
+
+```sql
+ALTER DATABASE findneo_test OWNER TO findneo_test_runner;
+```
+
+Table ownership inside the database is unaffected — migrations create the tables as `findneo_migrator`, so `FORCE ROW LEVEL SECURITY` behaves exactly as in production. Only database ownership moves.
 
 **Amended.** An earlier draft said the migrator owned the clones. That was incidental wording, and it was wrong to state: PostgreSQL requires the creating role to be a *member* of the owning role to assign ownership elsewhere, so it forced a `GRANT findneo_migrator TO findneo_test_runner`. That is strictly more privilege than anything needs.
 

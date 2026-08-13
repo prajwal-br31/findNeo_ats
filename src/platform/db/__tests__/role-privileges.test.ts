@@ -136,6 +136,13 @@ describe('role membership is not a back door', () => {
       expect(await isMemberOf(name, 'findneo_test_runner')).toBe(false);
     },
   );
+
+  it.each(PRODUCTION_ROLES)('%s cannot signal other backends', async (name) => {
+    /* The runner holds pg_signal_backend so it can disconnect sessions before
+       copying a database. Nothing that serves traffic has any business
+       terminating another session's backend. */
+    expect(await isMemberOf(name, 'pg_signal_backend')).toBe(false);
+  });
 });
 
 describe('SEC-003a: migrator credentials cannot reach a serving process', () => {
