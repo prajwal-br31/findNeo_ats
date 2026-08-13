@@ -80,6 +80,16 @@ function readNumber(data: RawEnv, key: string): number {
   return value;
 }
 
+/** Absent means none. Fail closed: an unset allowlist permits nothing. */
+function readOrigins(data: RawEnv): readonly string[] {
+  const raw = data['CORS_ALLOWED_ORIGINS'];
+  if (typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin !== '');
+}
+
 function readBoolean(data: RawEnv, key: string): boolean {
   return readString(data, key) === 'true';
 }
@@ -232,6 +242,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     database,
     storage,
     mail: { driver: readString(data, 'MAIL_DRIVER') as MailDriver },
+    corsAllowedOrigins: readOrigins(data),
     auth: {
       jwtPrivateKeyPem,
       jwtPublicKeyPem,
@@ -257,6 +268,10 @@ export function describeConfig(config: Config): Record<string, string> {
     databasePoolMax: String(config.database.poolMax),
     storage: config.storage.driver === 'filesystem' ? `filesystem @ ${config.storage.root}` : 's3',
     mailDriver: config.mail.driver,
+    corsAllowedOrigins:
+      config.corsAllowedOrigins.length === 0
+        ? '(none — no cross-origin permitted)'
+        : config.corsAllowedOrigins.join(', '),
     jwtKeypair: '[set]',
     cookieSecret: '[set]',
     swaggerEnabled: String(config.swagger.enabled),

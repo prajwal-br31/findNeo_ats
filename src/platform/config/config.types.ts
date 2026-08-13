@@ -55,6 +55,8 @@ export interface Config {
   readonly database: DatabaseConfig;
   readonly storage: StorageConfig;
   readonly mail: { readonly driver: MailDriver };
+  /** Empty means no cross-origin request is permitted. Never `*`. */
+  readonly corsAllowedOrigins: readonly string[];
   readonly auth: AuthSecretsConfig;
   readonly swagger: { readonly enabled: boolean };
   readonly telemetry: TelemetryConfig;

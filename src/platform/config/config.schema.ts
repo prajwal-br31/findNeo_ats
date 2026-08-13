@@ -46,6 +46,12 @@ export const RawEnvSchema = Type.Object(
 
     MAIL_DRIVER: StringEnum(['log', 'smtp']),
 
+    /* Comma-separated origins permitted on credentialed routes. Optional, and
+       absent means NONE — the closed default. CORS is never `*` on a
+       credentialed route (SEC-061), and the career-page origin that the public
+       surface needs is not known until Phase 4 (D-043). */
+    CORS_ALLOWED_ORIGINS: Type.Optional(Type.String({ minLength: 1 })),
+
     /* Base64-encoded PEM. Multi-line values do not survive `.env` transport
        reliably, so the key material is base64 on the wire and decoded here. */
     JWT_PRIVATE_KEY: Type.String({ minLength: 1 }),
