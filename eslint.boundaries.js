@@ -87,7 +87,7 @@ const ELEMENT_TYPE_RULES = [
     message:
       'The BFF adapts, it never decides — it may import application services only, ' +
       'never a repository, a domain entity or the database client (ER-002a, D-036). ' +
-      'Found an import of ${dependency.type}.',
+      'Found an import of {{dependency.type}}.',
   },
 
   {
@@ -95,20 +95,20 @@ const ELEMENT_TYPE_RULES = [
     allow: [
       'application',
       'shared',
-      ['module-support', { module: '${from.module}' }],
+      ['module-support', { module: '{{from.module}}' }],
       ['platform', { adapter: 'telemetry' }],
     ],
     message:
       'A controller validates, calls one application service, and shapes the response ' +
-      '(ER-002). It may not import ${dependency.type}.',
+      '(ER-002). It may not import {{dependency.type}}.',
   },
 
   {
     from: ['application'],
     allow: [
-      ['domain', { module: '${from.module}' }],
-      ['infrastructure', { module: '${from.module}' }],
-      ['module-support', { module: '${from.module}' }],
+      ['domain', { module: '{{from.module}}' }],
+      ['infrastructure', { module: '{{from.module}}' }],
+      ['module-support', { module: '{{from.module}}' }],
       /* Cross-module access is service to service, never repository to
          repository (ER-007). Note this entry carries no module capture. */
       'application',
@@ -117,31 +117,31 @@ const ELEMENT_TYPE_RULES = [
     ],
     message:
       'Cross-module access goes through application services; repositories and domain ' +
-      'entities are private to their module (ER-007). Found ${dependency.type} ' +
-      'from module "${dependency.module}".',
+      'entities are private to their module (ER-007). Found {{dependency.type}} ' +
+      'from module "{{dependency.module}}".',
   },
 
   {
     from: ['domain'],
-    allow: [['domain', { module: '${from.module}' }]],
+    allow: [['domain', { module: '{{from.module}}' }]],
     message:
       'The domain layer imports nothing — no ORM, no framework, no adapter, no platform ' +
       'code (ER-003b). A domain file that cannot be unit tested without a database is ' +
-      'not a domain file. Found ${dependency.type}.',
+      'not a domain file. Found {{dependency.type}}.',
   },
 
   {
     from: ['infrastructure'],
     allow: [
-      ['domain', { module: '${from.module}' }],
-      ['module-support', { module: '${from.module}' }],
+      ['domain', { module: '{{from.module}}' }],
+      ['module-support', { module: '{{from.module}}' }],
       'shared',
       'platform',
       'platform-db',
     ],
     message:
       'Repositories construct queries and map rows — no business rules, no permission ' +
-      'checks, no cross-module calls (ER-005, ER-007). Found ${dependency.type}.',
+      'checks, no cross-module calls (ER-005, ER-007). Found {{dependency.type}}.',
   },
 
   {
@@ -149,14 +149,14 @@ const ELEMENT_TYPE_RULES = [
     allow: ['application', 'shared', 'platform'],
     message:
       'A worker binds tenant context and calls an application service, exactly like the ' +
-      'API (ER-043). It may not import ${dependency.type}.',
+      'API (ER-043). It may not import {{dependency.type}}.',
   },
 
   { from: ['platform', 'platform-db'], allow: ['platform', 'platform-db', 'shared'] },
   { from: ['shared'], allow: ['shared'] },
   {
     from: ['module-support'],
-    allow: [['domain', { module: '${from.module}' }], 'shared'],
+    allow: [['domain', { module: '{{from.module}}' }], 'shared'],
   },
 
   /* Explicit disallows for the cases worth explaining. Everything not allowed
@@ -170,7 +170,7 @@ const ELEMENT_TYPE_RULES = [
       'The BFF adapts, it never decides (ER-002a, D-036). It may import application ' +
       'services only — never a repository, a domain entity, or the database client. ' +
       'If a rule appears in src/bff/, it is in the wrong layer: move it down, do not ' +
-      'duplicate it. Found ${dependency.type}.',
+      'duplicate it. Found {{dependency.type}}.',
   },
   {
     from: ['controller'],
@@ -178,7 +178,7 @@ const ELEMENT_TYPE_RULES = [
     message:
       'A controller validates input, calls one application service, and shapes the ' +
       'response (ER-002). Never reach the database outside a repository (ER-006). ' +
-      'Found ${dependency.type}.',
+      'Found {{dependency.type}}.',
   },
   {
     from: ['domain'],
@@ -186,18 +186,18 @@ const ELEMENT_TYPE_RULES = [
     message:
       'The domain layer imports nothing — no ORM, no framework, no adapter, no platform ' +
       'code (ER-003b). A domain file that cannot be unit tested without a database is ' +
-      'not a domain file. Found ${dependency.type}.',
+      'not a domain file. Found {{dependency.type}}.',
   },
   {
     from: ['application'],
     disallow: [
-      ['infrastructure', { module: '!(${from.module})' }],
-      ['domain', { module: '!(${from.module})' }],
+      ['infrastructure', { module: '!({{from.module}})' }],
+      ['domain', { module: '!({{from.module}})' }],
     ],
     message:
       'Cross-module access goes through application services, never repository to ' +
       'repository (ER-007). Repositories and domain entities are private to their ' +
-      'module — call module "${dependency.module}"\'s application service instead.',
+      'module — call module "{{dependency.module}}"\'s application service instead.',
   },
 ];
 
@@ -206,7 +206,7 @@ const EXTERNAL_RULES = [
     from: ['domain'],
     disallow: ['*', '@*/*'],
     message:
-      'The domain layer imports nothing external (ER-003b, D-037). "${dependency.source}" ' +
+      'The domain layer imports nothing external (ER-003b, D-037). "{{dependency.source}}" ' +
       'belongs behind a port, and the invariant belongs in a file that can be tested ' +
       'without one.',
   },
@@ -214,7 +214,7 @@ const EXTERNAL_RULES = [
     from: ['bff', 'controller', 'application', 'module-support', 'shared', 'worker'],
     disallow: PLATFORM_ONLY_PACKAGES,
     message:
-      'External SDKs appear only in platform/ (ER-011, D-004). "${dependency.source}" must ' +
+      'External SDKs appear only in platform/ (ER-011, D-004). "{{dependency.source}}" must ' +
       'sit behind a port so the on-premise implementation can differ and tests can fake it.',
   },
   {
@@ -222,7 +222,7 @@ const EXTERNAL_RULES = [
     disallow: HTTP_PACKAGES,
     message:
       'The application and domain layers never import HTTP types (ER-004) — that is what ' +
-      'makes them callable from a worker. Found "${dependency.source}".',
+      'makes them callable from a worker. Found "{{dependency.source}}".',
   },
 ];
 
@@ -249,7 +249,7 @@ export function boundariesConfig({ rootPath, files }) {
         {
           default: 'disallow',
           message:
-            'Dependencies point downward only (ER-001): ${file.type} may not import ${dependency.type}.',
+            'Dependencies point downward only (ER-001): {{file.type}} may not import {{dependency.type}}.',
           rules: ELEMENT_TYPE_RULES,
         },
       ],
@@ -263,22 +263,25 @@ export function boundariesConfig({ rootPath, files }) {
         'error',
         {
           default: 'allow',
-          rules: [
+          policies: [
             {
-              target: ['platform-db'],
+              target: [{ element: { type: 'platform-db' } }],
               disallow: ['*'],
               message:
                 'platform/db exposes only unit-of-work.ts and tx-scope.ts (D-044). ' +
                 'The pool and the Drizzle client are deliberately unreachable — obtain a ' +
                 'transaction through UnitOfWorkPort and pass the TxScope down (ER-004a).',
             },
-            { target: ['platform-db'], allow: ['unit-of-work.ts', 'tx-scope.ts'] },
+            {
+              target: [{ element: { type: 'platform-db' } }],
+              allow: ['unit-of-work.ts', 'tx-scope.ts'],
+            },
           ],
         },
       ],
       /* A file belonging to no element is a file no rule constrains. */
       'boundaries/no-unknown-files': 'error',
-      'boundaries/no-unknown': 'error',
+      'boundaries/no-unknown-dependencies': 'error',
     },
   };
 }

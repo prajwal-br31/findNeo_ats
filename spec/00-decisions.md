@@ -57,6 +57,7 @@ When any other document, prior chat transcript, or session extraction disagrees 
 | D-043 | Career site: hosted page in v1, embed widget Phase 2 | Accepted |
 | D-044 | Unit of Work port — transactions without leaking the ORM upward | Accepted |
 | D-045 | Version policy: dev tooling tracks current, runtime stays conservative | Accepted |
+| D-046 | Local development and tests run against native PostgreSQL, not Testcontainers | Accepted |
 
 ---
 
@@ -545,6 +546,25 @@ export interface UnitOfWorkPort {
 **Standing exception recorded now:** TypeScript stays on latest 5.x until `typescript-eslint` and Drizzle both officially support TypeScript 7. The risk is not the compiler; it is type inference in the two tools the whole codebase depends on. Re-evaluate at the end of Phase 1 and propose a decision entry.
 
 **Exact pinning still applies.** No `^`, no `~`, lockfile committed, `--frozen-lockfile` in CI. "Latest at install" means resolved once, recorded, and changed deliberately.
+
+---
+
+### D-046 — Local development and tests run against native PostgreSQL
+**Accepted.** Amends `11-testing-strategy.md` §2 for the local environment only.
+
+Docker is not available on the primary development machine. Both the application and the test suite run against a natively installed PostgreSQL 18.
+
+**Required, not optional:**
+- `DATABASE_URL` and `DATABASE_URL_TEST` are **required config values with no defaults**. A missing value fails at startup (SEC-060).
+- A **database-name guard** rejects any test run whose target database name does not end in `_test`, checked before any DDL. The harness drops and recreates databases; a silent fallback to the development connection destroys work.
+- The template-database restore pattern from `11-testing-strategy.md` §2 is unchanged — it works identically against a plain server.
+- **Two test connections are required**, not one: an owner role and the application role. `FORCE ROW LEVEL SECURITY` is only meaningful against a role that owns nothing, and the owner connection is what proves seeded rows exist — otherwise a zero-row result passes vacuously whether isolation works or not.
+
+**Trade-off accepted:** no guaranteed clean state between runs. A test leaving residue can pass on leftover state and fail elsewhere. Manageable with one developer; revisit if the team grows.
+
+**CI is unaffected** — GitHub Actions provides PostgreSQL as a service container. Testcontainers remains the specified approach for any environment where a container runtime exists; this decision governs the local machine.
+
+**Migration 001 requires a superuser once per fresh install.** `findneo_migrator` is `NOCREATEROLE` by design, and `CREATE EXTENSION citext` is not a trusted extension. Every block in migration 001 is guarded and idempotent, so re-running is a no-op.
 
 ---
 

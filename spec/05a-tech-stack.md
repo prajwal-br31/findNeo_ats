@@ -173,13 +173,17 @@ Zero new infrastructure on-premise, and jobs enqueue in the same transaction as 
 | `vitest` | 2.x | Test runner |
 | `@testcontainers/postgresql` | 10.x | Real Postgres in tests (ER-053) |
 | `supertest` or Fastify `inject` | — | HTTP-level tests — `inject` preferred, no socket needed |
-| `eslint` + `typescript-eslint` | 9.x / 8.x | Linting |
-| `eslint-plugin-boundaries` | 5.x | **Enforces ER-001 and ER-007 layer rules mechanically** |
-| `prettier` | 3.x | Formatting |
-| `husky` + `lint-staged` | 9.x / 15.x | Pre-commit gate |
-| `@commitlint/cli` | 19.x | Conventional commits |
+| `eslint` + `typescript-eslint` | 10.8.1 / 8.67.0 | Linting. Resolved 2026-08-12 (D-045) |
+| `eslint-plugin-boundaries` | 7.2.0 | **Enforces ER-001 and ER-007 layer rules mechanically.** Resolved 2026-08-12 (D-045) |
+| `prettier` | 3.9.6 | Formatting. Resolved 2026-08-12 (D-045) |
+| `husky` + `lint-staged` | 9.1.7 / 17.3.0 | Pre-commit gate. Resolved 2026-08-12 (D-045) |
+| `@commitlint/cli` | 21.2.1 | Conventional commits. Resolved 2026-08-12 (D-045) |
 
 **`eslint-plugin-boundaries` is the important one.** It turns "controllers must not import repositories" and "no cross-module repository imports" from review conventions into build failures. Any rule enforceable by a linter should be, because an AI agent will otherwise violate it confidently and plausibly.
+
+**Outstanding: the boundaries v5 → v7 API migration.** The plugin now unifies `element-types`, `external` and `entry-point` into a single `boundaries/dependencies` rule with object selectors, and deprecates the option shapes this repository uses. The current configuration is functionally correct and proven by `pnpm verify:boundaries`, but emits deprecation warnings on every run, and the deprecated rules will be removed in a future major.
+
+This is tracked as its own task rather than folded into the version bump: it is a rewrite of the most security-critical configuration in the repository, and a wrong selector silently declassifies an element rather than failing. That is not theoretical — during the 2026-08-12 upgrade, migrating `mode: 'full'` to `partialMatch: false` (a change the plugin's own deprecation notice recommends) stopped `*.controller.ts` matching the `controller` element, so `boundaries/element-types` quietly stopped firing on a planted violation and only `no-unknown-files` caught it. `pnpm verify:boundaries` failed, the change was reverted, and `mode` was kept. **That is ER-052a earning its place**, and the same check must gate the eventual migration.
 
 **Vitest over Jest:** native ESM and TypeScript, materially faster, and its watch mode suits a spec-then-test workflow.
 

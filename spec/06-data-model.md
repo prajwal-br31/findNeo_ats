@@ -37,6 +37,14 @@ Three PostgreSQL application roles, none of them superuser, none of them the tab
 
 `findneo_public` is the important one. Its blast radius is bounded by grants rather than by handler correctness — an authorization bug in the only unauthenticated write path cannot reach data the role was never granted.
 
+### Grant defaults are deliberately narrow
+
+`ALTER DEFAULT PRIVILEGES` grants **`SELECT` and `INSERT` only**. `UPDATE` and `DELETE` are granted per-table, in the migration that creates each table.
+
+**Why the inversion:** `audit_logs` must never receive `UPDATE` or `DELETE` (SEC-036), and a blanket default would hand them over, requiring every future audit-like table to remember a revoke. Forgetting an explicit grant is a loud runtime error caught by the first test. Forgetting a revoke is a silent hole nobody notices until it matters.
+
+The same reasoning applies to any table added later whose integrity depends on being append-only.
+
 ### The canonical policy
 
 Every tenant-scoped table gets exactly this, unless noted:

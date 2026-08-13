@@ -147,7 +147,7 @@ You may not edit every spec. Editing permission is tiered because a document tha
 | `AGENTS.md`, `09-engineering-rules.md` | **Never edit.** Propose in the PR description |
 | `00-decisions.md` | **Never edit.** Propose a new decision entry for a human to ratify |
 | `03-business-rules.md`, `04-permissions.md`, `06-*`, `07-api-standards.md`, `10-security-baseline.md` | Propose a diff in the pull request. A human approves before merge |
-| `05a-tech-stack.md` | **Append only.** You may add a new dependency entry with all required justification fields. You may not change an existing version, remove an entry, or touch the Rejected section |
+| `05a-tech-stack.md` | **Append, plus dev-tooling versions.** You may add a new dependency entry with full justification, and you may change the pinned version of a **dev-tooling** dependency when D-045 authorises it — record the new version and the resolution date. You may not change a **runtime** dependency version, remove an entry, or touch the Rejected section |
 | `08-lld-*.md`, `11`, `12`, `13` | Edit freely — working documents that track implementation |
 
 **The rule underneath all of it:** when code and specification disagree, **stop and ask**. Never edit the spec to match code you have already written. Never pick one side silently. Say which two things conflict, cite the ids, and wait.
