@@ -7,7 +7,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import type { Pool, PoolClient } from 'pg';
 
 import { createDatabase, type DatabaseOptions, type TxClient } from './client.js';
-import { createTxScope, revokeTxScope } from './tx-scope.js';
+import { createTxScope, revokeTxScope, unwrapTxScope } from './tx-scope.js';
 
 /**
  * The `UnitOfWorkPort` implementation (D-044, ER-018, SEC-004).
@@ -109,6 +109,34 @@ export class DrizzleUnitOfWork implements UnitOfWorkPort {
 
   async withoutTenant<T>(fn: (tx: TxScope) => Promise<T>): Promise<T> {
     return this.#run(fn, assertNoTenantBound);
+  }
+
+  /**
+   * Starts untenanted and binds once, mid-transaction. Signup's shape.
+   *
+   * The single-use guard is the security-relevant part. A transaction that
+   * rebinds partway is a transaction whose earlier statements ran as one
+   * tenant and whose later ones ran as another — which is precisely what
+   * tenant context exists to make impossible, and which no RLS policy can
+   * catch because every individual statement is correctly scoped.
+   */
+  async withNewTenant<T>(
+    fn: (tx: TxScope, bind: (companyId: CompanyId) => Promise<void>) => Promise<T>,
+  ): Promise<T> {
+    return this.#run(async (scope) => {
+      let bound = false;
+      const bind = async (companyId: CompanyId): Promise<void> => {
+        if (bound) {
+          throw new TenantContextError(
+            'tenant context was already bound in this transaction — rebinding mid-transaction ' +
+              'would run earlier statements as one tenant and later ones as another',
+          );
+        }
+        bound = true;
+        await bindTenant(unwrapTxScope(scope), companyId);
+      };
+      return fn(scope, bind);
+    }, assertNoTenantBound);
   }
 
   /**

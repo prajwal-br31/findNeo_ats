@@ -4,9 +4,11 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import swagger from '@fastify/swagger';
 import underPressure from '@fastify/under-pressure';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import { randomUUID } from 'node:crypto';
 
+import type { AuthController } from '../modules/identity/auth.controller.js';
+import { registerIdentityRoutes } from '../modules/identity/identity.routes.js';
 import type { Config } from '../platform/config/config.types.js';
 import { describeForLog, toProblemDetails } from '../shared/errors/problem-details.js';
 import {
@@ -15,6 +17,32 @@ import {
   type RegisteredRoute,
   type RouteConfig,
 } from '../shared/http/route-metadata.js';
+
+/**
+ * The refresh cookie (08 §3).
+ *
+ * httpOnly so no script can read a 30-day credential; Secure everywhere except
+ * plain-HTTP local development, where the browser would otherwise refuse to
+ * store it and every cookie flow would fail for a reason that looks like a bug
+ * in the code. SameSite=Lax rather than Strict so a top-level navigation back
+ * into the app still carries it.
+ *
+ * `path` is scoped to the auth routes: nothing else needs the refresh token,
+ * and a cookie sent on every request is a cookie in every log and every proxy.
+ */
+const REFRESH_COOKIE_NAME = 'findneo_refresh';
+const REFRESH_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+function setRefreshCookie(reply: FastifyReply, token: string, config: Config): void {
+  void reply.setCookie(REFRESH_COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: config.nodeEnv !== 'development' && config.nodeEnv !== 'test',
+    sameSite: 'lax',
+    path: '/v1/auth',
+    maxAge: REFRESH_COOKIE_MAX_AGE_SECONDS,
+    signed: false,
+  });
+}
 
 /**
  * T-012 — the public listener. Serves `/v1/*` and `/bff/web/*` (AGENTS.md §4).
@@ -102,7 +130,35 @@ function registerErrorHandling(app: FastifyInstance): void {
   });
 }
 
-export async function buildApiServer(config: Config): Promise<ApiServer> {
+function registerModules(app: FastifyInstance, config: Config, deps: ApiDependencies): void {
+  registerIdentityRoutes(app, {
+    controller: deps.authController,
+    setRefreshCookie: (reply, token) => {
+      setRefreshCookie(reply as FastifyReply, token, config);
+    },
+    ...(deps.captureVerificationToken === undefined
+      ? {}
+      : { onVerificationToken: deps.captureVerificationToken }),
+    ...(deps.readLastEmail === undefined ? {} : { devEmailReader: deps.readLastEmail }),
+  });
+}
+
+export interface ApiDependencies {
+  readonly authController: AuthController;
+  /**
+   * Development only. When present, `GET /v1/dev/last-email` is registered and
+   * signup's verification token is captured into the development outbox.
+   */
+  readonly captureVerificationToken?: (info: {
+    companyId: string;
+    userId: string;
+    email: string;
+    token: string;
+  }) => void;
+  readonly readLastEmail?: () => unknown;
+}
+
+export async function buildApiServer(config: Config, deps?: ApiDependencies): Promise<ApiServer> {
   const routes: RegisteredRoute[] = [];
   const exempt: { method: string; url: string }[] = [];
 
@@ -145,6 +201,11 @@ export async function buildApiServer(config: Config): Promise<ApiServer> {
 
   registerSecurity(app, config);
   registerErrorHandling(app);
+
+  /* Registered after swagger so the plugin's onRoute hook sees them, and after
+     the security plugins so the cookie decorator exists when a handler sets
+     the refresh cookie. */
+  if (deps !== undefined) registerModules(app, config, deps);
 
   return { app, routes, exemptRoutes: exempt };
 }

@@ -25,7 +25,7 @@ import { startTracing } from './platform/telemetry/tracing.js';
 const config = loadConfig(process.env);
 const logger = createLogger({ config });
 const tracing = startTracing(config);
-const container = buildContainer(config);
+const container = await buildContainer(config);
 
 const boss = new PgBoss({
   connectionString: config.database.url,

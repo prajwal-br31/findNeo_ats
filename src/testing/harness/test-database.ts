@@ -113,12 +113,41 @@ async function execDatabaseStatement(
   await client.query(sql);
 }
 
-/** Terminates other sessions; CREATE/DROP require the database to be idle. */
+/**
+ * Terminates other sessions; CREATE/DROP require the database to be idle.
+ *
+ * Superuser backends are skipped rather than attempted: only a superuser may
+ * terminate another superuser's backend, so including them turns a survivable
+ * situation into a raw `42501` from deep inside the harness. A GUI client left
+ * connected as `postgres` is the overwhelmingly common cause, and the useful
+ * response is to name it.
+ */
 async function disconnectEveryoneFrom(client: Client, database: string): Promise<void> {
   await client.query(
-    'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()',
+    `SELECT pg_terminate_backend(a.pid)
+       FROM pg_stat_activity a
+       JOIN pg_roles r ON r.rolname = a.usename
+      WHERE a.datname = $1 AND a.pid <> pg_backend_pid() AND NOT r.rolsuper`,
     [database],
   );
+
+  const survivors = await client.query<{ usename: string; application_name: string }>(
+    `SELECT DISTINCT a.usename, a.application_name
+       FROM pg_stat_activity a
+      WHERE a.datname = $1 AND a.pid <> pg_backend_pid()`,
+    [database],
+  );
+
+  if (survivors.rows.length > 0) {
+    const who = survivors.rows
+      .map((row) => `${row.usename}${row.application_name ? ` (${row.application_name})` : ''}`)
+      .join(', ');
+    throw new HarnessError(
+      `"${database}" still has connections this role cannot terminate: ${who}. ` +
+        'PostgreSQL refuses CREATE DATABASE ... TEMPLATE while the source is in use, and only ' +
+        'a superuser may terminate a superuser backend. Disconnect that client and re-run.',
+    );
+  }
 }
 
 /**

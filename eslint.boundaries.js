@@ -110,6 +110,11 @@ const ELEMENT_TYPE_RULES = [
     allow: [
       'application',
       'shared',
+      /* A `*.routes.ts` file registering its own module's `*.controller.ts` —
+         the shape 08 §1 describes. Captured to the same module, so this is not
+         a general controller-to-controller edge: one module's routes still
+         cannot reach another module's controller. */
+      ['controller', { module: '{{from.module}}' }],
       ['module-support', { module: '{{from.module}}' }],
       ['platform', { adapter: 'telemetry' }],
     ],

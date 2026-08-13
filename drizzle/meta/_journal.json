@@ -15,6 +15,76 @@
       "when": 1786612077996,
       "tag": "0001b_idempotency_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786612137996,
+      "tag": "0002_companies",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786612197996,
+      "tag": "0003_users_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786612257996,
+      "tag": "0004_companies_owner_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786612317996,
+      "tag": "0005_departments",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786612377996,
+      "tag": "0006_permissions_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786612437996,
+      "tag": "0007_invitations",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786612497996,
+      "tag": "0008_settings_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786612557996,
+      "tag": "0009_outbox_audit_activity",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786612617996,
+      "tag": "0013_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786612677996,
+      "tag": "0015_seed",
+      "breakpoints": true
     }
   ]
 }

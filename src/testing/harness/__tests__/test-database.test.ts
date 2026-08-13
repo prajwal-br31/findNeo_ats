@@ -130,10 +130,42 @@ describe('clone isolation', () => {
   });
 });
 
-describe('seedTwoTenants (D-048b)', () => {
-  it('throws rather than seeding nothing', () => {
-    /* A fixture that returns empty tenants makes every leak test pass
-       vacuously: alpha cannot read beta's data when beta has none. */
-    expect(() => seedTwoTenants()).toThrow(/T-020a/);
-  });
+describe('seedTwoTenants (D-048b, T-020a)', () => {
+  let database: TestDatabase;
+
+  beforeAll(async () => {
+    database = await createTestDatabase();
+    clones.push(database);
+  }, 120_000);
+
+  it('seeds two genuinely distinct tenants', async () => {
+    const seeded = await seedTwoTenants(database);
+
+    /* The fixture's whole job is to make a leak test meaningful, so what is
+       asserted is that the control tenant actually exists and differs. */
+    expect(seeded.alpha.companyId).not.toBe(seeded.beta.companyId);
+    expect(seeded.alpha.ownerUserId).not.toBe(seeded.beta.ownerUserId);
+    expect(seeded.alpha.departmentId).not.toBe(seeded.beta.departmentId);
+    expect(seeded.alpha.slug).not.toBe(seeded.beta.slug);
+  }, 60_000);
+
+  it('proves migration 015 seeded through the BYPASSRLS path (D-047b)', async () => {
+    /* Migration 015 runs as findneo_migrator against tables migration 013 put
+       under FORCE ROW LEVEL SECURITY. Under FORCE the owner is subject to
+       policies too, and no policy names the migrator — so without BYPASSRLS
+       every insert in 015 is denied. This asserts the result of that path,
+       which had never executed before this slice. */
+    const client = new Client({ connectionString: database.ownerUrl });
+    await client.connect();
+    try {
+      const { rows } = await client.query<{ permissions: string; roles: string }>(
+        `SELECT (SELECT count(*) FROM permissions) AS permissions,
+                (SELECT count(*) FROM roles WHERE company_id IS NULL) AS roles`,
+      );
+      expect(Number(rows[0]?.permissions)).toBeGreaterThan(60);
+      expect(Number(rows[0]?.roles)).toBe(8);
+    } finally {
+      await client.end();
+    }
+  }, 60_000);
 });

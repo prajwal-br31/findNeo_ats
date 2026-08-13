@@ -2,6 +2,7 @@ import { buildApiServer } from './bootstrap/api.js';
 import { buildContainer } from './bootstrap/container.js';
 import { buildOpsServer } from './bootstrap/ops.js';
 import { loadConfig } from './platform/config/config.js';
+import { readLastDevEmail, recordDevEmail } from './platform/mail/dev-outbox.js';
 import { createLogger } from './platform/telemetry/logger.js';
 import { createMetrics } from './platform/telemetry/metrics.js';
 import { startTracing } from './platform/telemetry/tracing.js';
@@ -29,9 +30,31 @@ const config = loadConfig(process.env);
 const logger = createLogger({ config });
 const tracing = startTracing(config);
 const metrics = createMetrics();
-const container = buildContainer(config);
+const container = await buildContainer(config);
 
-const api = await buildApiServer(config);
+/* The development outbox is wired only in development, and the route that
+   reads it is registered under the same condition (08 §7). Two guards rather
+   than one, because either alone is the kind of thing a refactor removes. */
+const isDevelopment = config.nodeEnv === 'development';
+
+const api = await buildApiServer(config, {
+  authController: container.authController,
+  ...(isDevelopment
+    ? {
+        captureVerificationToken: (info) => {
+          recordDevEmail({
+            to: info.email,
+            template: 'email.verification',
+            token: info.token,
+            companyId: info.companyId,
+            userId: info.userId,
+            capturedAt: new Date().toISOString(),
+          });
+        },
+        readLastEmail: readLastDevEmail,
+      }
+    : {}),
+});
 
 /* `.swagger()` reads the registered route table, which does not exist until
    the plugin tree is built — so `ready()` first, or it throws. Doing it here

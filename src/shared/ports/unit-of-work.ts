@@ -54,4 +54,32 @@ export interface UnitOfWorkPort {
    * behaviour, not a limitation to work around.
    */
   withoutTenant<T>(fn: (tx: TxScope) => Promise<T>): Promise<T>;
+
+  /**
+   * One transaction that **becomes** tenanted partway through.
+   *
+   * Signup is the case this exists for, and it is not expressible with the two
+   * methods above. The company row must be inserted before any tenant id
+   * exists, and every insert after it — user, role assignment, settings,
+   * outbox — is tenant-scoped and fails RLS unless context is bound. Doing the
+   * first half in `withoutTenant` and the second in `withTenant` means two
+   * transactions, and a crash between them leaves a company with no owner: a
+   * tenant nobody can log into and nothing will clean up (08 §5).
+   *
+   * ```ts
+   * await uow.withNewTenant(async (tx, bind) => {
+   *   const company = await companies.insert(tx, input);   // untenanted
+   *   await bind(company.id);
+   *   await users.insert(tx, { companyId: company.id, … }); // tenanted
+   * });
+   * ```
+   *
+   * `bind` may be called **at most once**, and binding still happens inside
+   * `platform/db` — no application service ever issues `set_config` itself
+   * (ER-018). Calling it twice throws rather than rebinding: a transaction
+   * that changes tenant halfway is indistinguishable from a leak.
+   */
+  withNewTenant<T>(
+    fn: (tx: TxScope, bind: (companyId: CompanyId) => Promise<void>) => Promise<T>,
+  ): Promise<T>;
 }
