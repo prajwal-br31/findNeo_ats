@@ -36,6 +36,8 @@ export interface ProbeDatabase {
   readonly ownerPool: Pool;
   readonly alpha: string;
   readonly beta: string;
+  /** Rows written, counted before RLS was enabled. See setUpProbeDatabase. */
+  readonly seededCount: number;
   teardown(): Promise<void>;
 }
 
@@ -49,21 +51,48 @@ function requireEnv(name: string): string {
   return value;
 }
 
-/** The canonical tenant policy of 06 §2, applied to the probe table. */
 async function createProbeTable(pool: Pool): Promise<void> {
   await pool.query('DROP TABLE IF EXISTS rls_probe');
   await pool.query(
     'CREATE TABLE rls_probe (id uuid PRIMARY KEY DEFAULT uuidv7(), company_id uuid, label text NOT NULL)',
   );
+  await pool.query('GRANT SELECT, INSERT, UPDATE, DELETE ON rls_probe TO findneo_app');
+}
+
+/**
+ * The canonical policy of 06 §2 — applied **after** seeding, deliberately.
+ *
+ * `FORCE ROW LEVEL SECURITY` subjects the table owner to policies as well, and
+ * the canonical policy names `TO findneo_app` only. `findneo_migrator`
+ * therefore has no applicable policy and is default-denied on its own table:
+ * it can neither insert the fixture rows nor read them back.
+ *
+ * Enabling RLS last is the correct order for a fixture, and mirrors what the
+ * schema migrations must also account for — see the note in the test file.
+ */
+async function enableRowLevelSecurity(pool: Pool): Promise<void> {
   await pool.query('ALTER TABLE rls_probe ENABLE ROW LEVEL SECURITY');
   await pool.query('ALTER TABLE rls_probe FORCE ROW LEVEL SECURITY');
+  /*
+   * `nullif(…, '')` is load-bearing, and 06 §2's canonical policy omits it.
+   *
+   * A transaction-local GUC does not become undefined when its transaction
+   * ends — it reverts to the empty string. So `current_setting(…, true)`
+   * returns NULL only on a connection that has *never* bound a tenant, and
+   * `''` on every connection that has served one before. Casting `''::uuid`
+   * raises `invalid input syntax for type uuid` rather than yielding NULL, so
+   * without nullif the unbound query errors instead of returning zero rows.
+   *
+   * It still fails closed — no rows leak — but the failure direction stated in
+   * SEC-003 is "nothing", not "error", and in production this would surface as
+   * a 500 on any untenanted query that happened to reuse a warm connection.
+   */
   await pool.query(`
     CREATE POLICY tenant_isolation ON rls_probe
       AS PERMISSIVE FOR ALL TO findneo_app
-      USING      (company_id = current_setting('app.current_company_id', true)::uuid)
-      WITH CHECK (company_id = current_setting('app.current_company_id', true)::uuid)
+      USING      (company_id = nullif(current_setting('app.current_company_id', true), '')::uuid)
+      WITH CHECK (company_id = nullif(current_setting('app.current_company_id', true), '')::uuid)
   `);
-  await pool.query('GRANT SELECT, INSERT, UPDATE, DELETE ON rls_probe TO findneo_app');
 }
 
 export async function setUpProbeDatabase(): Promise<ProbeDatabase> {
@@ -85,6 +114,15 @@ export async function setUpProbeDatabase(): Promise<ProbeDatabase> {
     [alpha, beta],
   );
 
+  /* Counted here, while the owner can still read the table. Once FORCE is on
+     the owner is default-denied, so this is the last chance to establish that
+     the rows really were written — which is what stops "the app sees zero"
+     from passing vacuously against an empty table. */
+  const counted = await ownerPool.query<{ n: number }>('SELECT count(*)::int AS n FROM rls_probe');
+  const seededCount = counted.rows[0]?.n ?? -1;
+
+  await enableRowLevelSecurity(ownerPool);
+
   /* Pool deliberately smaller than the concurrency the tests drive, so
      connections are reused. Reuse is what surfaces a context leak. */
   const app = createDatabase({ url: appUrl, poolMax: 2, applicationName: 'findneo-test-app' });
@@ -94,6 +132,7 @@ export async function setUpProbeDatabase(): Promise<ProbeDatabase> {
     ownerPool,
     alpha,
     beta,
+    seededCount,
     teardown: async (): Promise<void> => {
       await app.close();
       await ownerPool.query('DROP TABLE IF EXISTS rls_probe');

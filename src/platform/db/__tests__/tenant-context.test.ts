@@ -15,6 +15,14 @@ import { setUpProbeDatabase, type ProbeDatabase } from './support/probe-database
  * load (SEC-005) — tested in parallel, never sequentially.
  *
  * Also covers 06 §10 items 1, 2 and 9.
+ *
+ * NOTE FOR PHASE 1 — surfaced by this fixture. `FORCE ROW LEVEL SECURITY`
+ * applies to the table owner too, and 06 §2's canonical policy names
+ * `TO findneo_app` only. `findneo_migrator` therefore has no applicable policy
+ * and is default-denied on every tenant table it owns. Migration 015 (seed)
+ * runs as `findneo_migrator` **after** migration 013 enables FORCE, so as
+ * currently ordered it cannot write its rows. Needs a decision before Phase 1:
+ * seed before 013, grant the migrator an explicit policy, or give it BYPASSRLS.
  */
 
 let probe: ProbeDatabase;
@@ -33,9 +41,16 @@ afterAll(async () => {
   if (started) await probe.teardown();
 });
 
+/**
+ * Returns null when no tenant is bound.
+ *
+ * `''` and NULL both mean unbound: a transaction-local GUC reverts to the
+ * empty string when its transaction ends rather than becoming undefined, so a
+ * connection that has served a bound transaction reports `''` afterwards.
+ */
 async function boundCompanyId(scope: TxScope): Promise<string | null> {
   const result = await unwrapTxScope(scope).execute<{ current: string | null }>(
-    sql`select current_setting('app.current_company_id', true) as current`,
+    sql`select nullif(current_setting('app.current_company_id', true), '') as current`,
   );
   return result.rows[0]?.current ?? null;
 }
@@ -68,11 +83,9 @@ describe('set_config is parameterised and transaction-local', () => {
 });
 
 describe('unset context returns zero rows, not all rows', () => {
-  it('06 §10.1: the rows exist — control, so a zero count cannot pass vacuously', async () => {
-    const owned = await probe.ownerPool.query<{ n: number }>(
-      'SELECT count(*)::int AS n FROM rls_probe',
-    );
-    expect(owned.rows[0]?.n).toBe(3);
+  it('06 §10.1: the rows exist — control, so a zero count cannot pass vacuously', () => {
+    // Counted by the owner before FORCE was enabled; see probe-database.ts.
+    expect(probe.seededCount).toBe(3);
   });
 
   it('SEC-003: findneo_app with no context bound sees zero rows', async () => {
