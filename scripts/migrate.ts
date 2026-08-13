@@ -11,6 +11,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 
 import { assertTestDatabaseName } from '../src/platform/config/database-url.js';
+import { installQueueSchema } from '../src/platform/queue/install.js';
 
 const MIGRATIONS_FOLDER = 'drizzle';
 
@@ -32,6 +33,13 @@ async function main(): Promise<void> {
     process.stdout.write(`Applying migrations to "${database}"...\n`);
     await migrate(drizzle(pool), { migrationsFolder: MIGRATIONS_FOLDER });
     process.stdout.write('Migrations applied.\n');
+
+    /* pg-boss creates its own schema, tables and per-queue partitions — DDL
+       the serving role deliberately cannot do. So it is installed here, as
+       the migrator, and the app is granted DML on it (05a §5). */
+    process.stdout.write('Installing queue schema...\n');
+    await installQueueSchema(url);
+    process.stdout.write('Queue schema installed.\n');
   } finally {
     await pool.end();
   }

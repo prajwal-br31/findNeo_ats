@@ -21,6 +21,12 @@ export type TxClient = Parameters<Parameters<AppDatabase['transaction']>[0]>[0];
 
 export interface DatabaseHandle {
   readonly db: AppDatabase;
+  /**
+   * The pool itself. The Unit of Work drives BEGIN/COMMIT on a checked-out
+   * client rather than delegating to `db.transaction()`, so a `TxScope` can
+   * carry the raw connection as well as the Drizzle handle — see tx-scope.ts.
+   */
+  readonly pool: Pool;
   close(): Promise<void>;
 }
 
@@ -40,6 +46,7 @@ export function createDatabase(options: DatabaseOptions): DatabaseHandle {
 
   return {
     db: drizzle(pool),
+    pool,
     close: async (): Promise<void> => {
       await pool.end();
     },

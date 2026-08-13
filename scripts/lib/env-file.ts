@@ -100,6 +100,7 @@ JWT_PRIVATE_KEY=${keypair.privateKey}
 JWT_PUBLIC_KEY=${keypair.publicKey}
 COOKIE_SECRET=${generateSecret(32)}
 
+WORKER_DOMAINS=all
 SWAGGER_ENABLED=true
 OTEL_ENABLED=false
 `;

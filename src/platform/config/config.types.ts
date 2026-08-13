@@ -1,3 +1,5 @@
+import type { QueueDomain } from '../../shared/ports/queue.js';
+
 /**
  * Typed shape of validated application configuration.
  *
@@ -58,6 +60,8 @@ export interface Config {
   /** Empty means no cross-origin request is permitted. Never `*`. */
   readonly corsAllowedOrigins: readonly string[];
   readonly auth: AuthSecretsConfig;
+  /** Queue domains this process serves. Never empty — validated at load. */
+  readonly workerDomains: readonly QueueDomain[];
   readonly swagger: { readonly enabled: boolean };
   readonly telemetry: TelemetryConfig;
 }

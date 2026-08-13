@@ -58,6 +58,13 @@ export const RawEnvSchema = Type.Object(
     JWT_PUBLIC_KEY: Type.String({ minLength: 1 }),
     COOKIE_SECRET: Type.String({ minLength: 32 }),
 
+    /* Which queue domains this process serves. Comma-separated, or `all`.
+       05 §5: one process per domain in production, all six in one process
+       on-premise — "configuration, not a code path". Defaulting to `all`
+       would make a mis-set variable look like a working fleet, so it is
+       required and validated against QUEUE_DOMAINS. */
+    WORKER_DOMAINS: Type.String({ minLength: 1 }),
+
     SWAGGER_ENABLED: BooleanString,
     OTEL_ENABLED: BooleanString,
     OTEL_EXPORTER_OTLP_ENDPOINT: Type.Optional(Type.String({ minLength: 1 })),

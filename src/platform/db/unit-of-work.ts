@@ -3,7 +3,10 @@ import { sql, type SQL } from 'drizzle-orm';
 import type { UnitOfWorkPort, TxScope } from '../../shared/ports/unit-of-work.js';
 import type { CompanyId } from '../../shared/types/ids.js';
 
-import { createDatabase, type AppDatabase, type DatabaseOptions, type TxClient } from './client.js';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import type { Pool, PoolClient } from 'pg';
+
+import { createDatabase, type DatabaseOptions, type TxClient } from './client.js';
 import { createTxScope, revokeTxScope } from './tx-scope.js';
 
 /**
@@ -86,16 +89,16 @@ export interface UnitOfWorkHandle {
 export function createUnitOfWork(options: DatabaseOptions): UnitOfWorkHandle {
   const handle = createDatabase(options);
   return {
-    uow: new DrizzleUnitOfWork(handle.db),
+    uow: new DrizzleUnitOfWork(handle.pool),
     close: handle.close.bind(handle),
   };
 }
 
 export class DrizzleUnitOfWork implements UnitOfWorkPort {
-  readonly #db: AppDatabase;
+  readonly #pool: Pool;
 
-  constructor(db: AppDatabase) {
-    this.#db = db;
+  constructor(pool: Pool) {
+    this.#pool = pool;
   }
 
   async withTenant<T>(companyId: CompanyId, fn: (tx: TxScope) => Promise<T>): Promise<T> {
@@ -111,19 +114,35 @@ export class DrizzleUnitOfWork implements UnitOfWorkPort {
   /**
    * One transaction, one connection, one scope — revoked when `fn` settles so
    * the scope cannot outlive the connection binding it describes.
+   *
+   * BEGIN/COMMIT are driven here rather than through `db.transaction()`, so
+   * the checked-out connection is available to put on the scope. Adapters that
+   * speak `(text, values)` — pg-boss's `send({ db })` — then enqueue inside
+   * this transaction through public API rather than writing to another
+   * library's tables (ER-028, D-016).
    */
   async #run<T>(
     fn: (tx: TxScope) => Promise<T>,
     prepare: (tx: TxClient) => Promise<void>,
   ): Promise<T> {
-    return this.#db.transaction(async (tx) => {
-      await prepare(tx);
-      const scope = createTxScope(tx);
+    const connection: PoolClient = await this.#pool.connect();
+    try {
+      await connection.query('BEGIN');
+      const tx = drizzle(connection) as unknown as TxClient;
+      const scope = createTxScope(tx, connection);
       try {
-        return await fn(scope);
+        await prepare(tx);
+        const result = await fn(scope);
+        await connection.query('COMMIT');
+        return result;
+      } catch (error) {
+        await connection.query('ROLLBACK');
+        throw error;
       } finally {
         revokeTxScope(scope);
       }
-    });
+    } finally {
+      connection.release();
+    }
   }
 }

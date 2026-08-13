@@ -1,5 +1,7 @@
 import { Ajv, type ErrorObject } from 'ajv';
 
+import { QUEUE_DOMAINS, type QueueDomain } from '../../shared/ports/queue.js';
+
 import { KNOWN_ENV_KEYS, RawEnvSchema } from './config.schema.js';
 import type {
   Config,
@@ -88,6 +90,37 @@ function readOrigins(data: RawEnv): readonly string[] {
     .split(',')
     .map((origin) => origin.trim())
     .filter((origin) => origin !== '');
+}
+
+/**
+ * `all` or an explicit comma-separated list. An unknown domain is rejected
+ * rather than ignored: a typo that silently drops a domain leaves its jobs
+ * queued forever with no process serving them and nothing to see in a log.
+ */
+function readWorkerDomains(data: RawEnv, problems: string[]): readonly QueueDomain[] {
+  const raw = readString(data, 'WORKER_DOMAINS').trim();
+  if (raw === 'all') return QUEUE_DOMAINS;
+
+  const requested = raw
+    .split(',')
+    .map((domain) => domain.trim())
+    .filter((domain) => domain !== '');
+
+  const unknown = requested.filter(
+    (domain) => !(QUEUE_DOMAINS as readonly string[]).includes(domain),
+  );
+  if (unknown.length > 0) {
+    problems.push(
+      `WORKER_DOMAINS lists unknown domain(s) ${unknown.join(', ')}. ` +
+        `Valid domains are ${QUEUE_DOMAINS.join(', ')}, or \`all\`.`,
+    );
+  }
+  if (requested.length === 0) {
+    problems.push('WORKER_DOMAINS is empty. Use `all`, or list at least one domain.');
+  }
+  return requested.filter((domain): domain is QueueDomain =>
+    (QUEUE_DOMAINS as readonly string[]).includes(domain),
+  );
 }
 
 function readBoolean(data: RawEnv, key: string): boolean {
@@ -225,6 +258,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   const database = resolveDatabase(nodeEnv, data, problems);
   const storage = resolveStorage(data, problems);
   const telemetry = resolveTelemetry(data, problems);
+  const workerDomains = readWorkerDomains(data, problems);
   const jwtPrivateKeyPem = decodePem(data, 'JWT_PRIVATE_KEY', problems);
   const jwtPublicKeyPem = decodePem(data, 'JWT_PUBLIC_KEY', problems);
   checkOpsListener(data, problems);
@@ -248,6 +282,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       jwtPublicKeyPem,
       cookieSecret: readString(data, 'COOKIE_SECRET'),
     },
+    workerDomains,
     swagger: { enabled: readBoolean(data, 'SWAGGER_ENABLED') },
     telemetry,
   };
@@ -274,6 +309,7 @@ export function describeConfig(config: Config): Record<string, string> {
         : config.corsAllowedOrigins.join(', '),
     jwtKeypair: '[set]',
     cookieSecret: '[set]',
+    workerDomains: config.workerDomains.join(', '),
     swaggerEnabled: String(config.swagger.enabled),
     telemetry: config.telemetry.enabled ? config.telemetry.otlpEndpoint : 'disabled',
   };

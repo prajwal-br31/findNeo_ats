@@ -1,5 +1,7 @@
 import type { TxScope } from '../../shared/ports/unit-of-work.js';
 
+import type { PoolClient } from 'pg';
+
 import type { TxClient } from './client.js';
 
 /**
@@ -25,6 +27,15 @@ import type { TxClient } from './client.js';
 
 interface ScopeEntry {
   readonly client: TxClient;
+  /**
+   * The same transaction, as a raw `pg` connection.
+   *
+   * Some adapters need `(text, values)` execution rather than a Drizzle query
+   * — pg-boss's `send()` accepts a `db` executor of exactly that shape, which
+   * is how a job is enqueued inside the caller's transaction through public
+   * API instead of by writing to its tables directly (D-016, ER-028).
+   */
+  readonly connection: PoolClient;
   revoked: boolean;
 }
 
@@ -37,9 +48,9 @@ export class TxScopeError extends Error {
   }
 }
 
-export function createTxScope(client: TxClient): TxScope {
+export function createTxScope(client: TxClient, connection: PoolClient): TxScope {
   const token = Object.freeze({}) as unknown as TxScope;
-  registry.set(token, { client, revoked: false });
+  registry.set(token, { client, connection, revoked: false });
   return token;
 }
 
@@ -61,7 +72,7 @@ export function revokeTxScope(scope: TxScope): void {
  * @throws {TxScopeError} if the scope was not issued here, or its transaction
  *   has already ended.
  */
-export function unwrapTxScope(scope: TxScope): TxClient {
+function entryFor(scope: TxScope): ScopeEntry {
   const entry = registry.get(scope);
   if (entry === undefined) {
     throw new TxScopeError(
@@ -74,5 +85,18 @@ export function unwrapTxScope(scope: TxScope): TxClient {
         'and its connection may since have been rebound to another tenant',
     );
   }
-  return entry.client;
+  return entry;
+}
+
+export function unwrapTxScope(scope: TxScope): TxClient {
+  return entryFor(scope).client;
+}
+
+/**
+ * The raw connection behind a scope, for adapters that speak `(text, values)`.
+ *
+ * Same validity rules as `unwrapTxScope`: forged and expired scopes throw.
+ */
+export function unwrapTxConnection(scope: TxScope): PoolClient {
+  return entryFor(scope).connection;
 }
