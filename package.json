@@ -15,6 +15,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "test": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs run",
+    "test:watch": "node --env-file-if-exists=.env ./node_modules/vitest/vitest.mjs",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "verify:boundaries": "tsx scripts/verify-boundaries.ts",
     "verify:semgrep": "tsx scripts/verify-semgrep.ts",
     "db:setup": "tsx scripts/setup-dev-db.ts",
@@ -33,6 +36,7 @@
   "dependencies": {
     "@sinclair/typebox": "0.34.52",
     "ajv": "8.20.0",
+    "drizzle-orm": "0.45.2",
     "pg": "8.23.0"
   },
   "devDependencies": {
@@ -40,6 +44,7 @@
     "@commitlint/config-conventional": "19.8.1",
     "@types/node": "22.20.1",
     "@types/pg": "8.21.0",
+    "drizzle-kit": "0.31.10",
     "eslint": "9.39.5",
     "eslint-plugin-boundaries": "5.4.0",
     "husky": "9.1.7",
@@ -47,6 +52,7 @@
     "prettier": "3.9.6",
     "tsx": "4.23.12",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.67.0"
+    "typescript-eslint": "8.67.0",
+    "vitest": "4.1.10"
   }
 }

@@ -254,6 +254,28 @@ export function boundariesConfig({ rootPath, files }) {
         },
       ],
       'boundaries/external': ['error', { default: 'allow', rules: EXTERNAL_RULES }],
+
+      /* D-044 — platform/db exposes only its port implementation and the
+         TxScope unwrap. The pool and the Drizzle instance are unreachable, so
+         no repository can obtain an unbound client and run a query outside a
+         tenant-scoped transaction. */
+      'boundaries/entry-point': [
+        'error',
+        {
+          default: 'allow',
+          rules: [
+            {
+              target: ['platform-db'],
+              disallow: ['*'],
+              message:
+                'platform/db exposes only unit-of-work.ts and tx-scope.ts (D-044). ' +
+                'The pool and the Drizzle client are deliberately unreachable — obtain a ' +
+                'transaction through UnitOfWorkPort and pass the TxScope down (ER-004a).',
+            },
+            { target: ['platform-db'], allow: ['unit-of-work.ts', 'tx-scope.ts'] },
+          ],
+        },
+      ],
       /* A file belonging to no element is a file no rule constrains. */
       'boundaries/no-unknown-files': 'error',
       'boundaries/no-unknown': 'error',

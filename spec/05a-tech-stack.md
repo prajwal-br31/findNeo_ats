@@ -178,38 +178,10 @@ Zero new infrastructure on-premise, and jobs enqueue in the same transaction as 
 | `prettier` | 3.x | Formatting |
 | `husky` + `lint-staged` | 9.x / 15.x | Pre-commit gate |
 | `@commitlint/cli` | 19.x | Conventional commits |
-| `syncpack` | 13.x | Version consistency |
 
 **`eslint-plugin-boundaries` is the important one.** It turns "controllers must not import repositories" and "no cross-module repository imports" from review conventions into build failures. Any rule enforceable by a linter should be, because an AI agent will otherwise violate it confidently and plausibly.
 
 **Vitest over Jest:** native ESM and TypeScript, materially faster, and its watch mode suits a spec-then-test workflow.
-
-### Ambient type packages
-
-Appended during Phase 0 (T-001). These ship no runtime code — they are `.d.ts` declarations consumed only by `tsc`, and they are absent from the built image.
-
-| Component | Version | Purpose |
-|---|---|---|
-| `@types/node` | 22.20.1 | Type declarations for the Node 22 standard library |
-| `@types/pg` | 8.21.0 | Type declarations for `pg` (§2), which ships none of its own |
-
-**Alternative considered:** doing without them. Not viable — `strict` with `noImplicitAny` (ER-012) makes every `node:` and `pg` import an error without declarations, and the alternative of hand-writing local declaration files means maintaining a second copy of an API surface that changes with each release.
-
-**Version policy:** `@types/node` tracks the **runtime major**, not the newest release. It is pinned to 22.x because the runtime is Node 22 LTS (§1); installing 26.x would type-check the code against standard-library APIs that do not exist at runtime, which is a defect the compiler would actively conceal.
-
-**Maintenance and licence:** both are DefinitelyTyped packages — MIT, published continuously, effectively zero bus-factor risk. Transitive tree: `@types/node` pulls only `undici-types`; `@types/pg` pulls `@types/node`. No runtime transitive dependencies.
-
-### Commit message ruleset
-
-Appended during Phase 0 (T-002). Dev-only, never in the built image.
-
-| Component | Version | Purpose |
-|---|---|---|
-| `@commitlint/config-conventional` | 19.8.1 | The Conventional Commits ruleset `@commitlint/cli` (§8) validates against |
-
-**Alternative considered:** declaring the rules inline in `commitlint.config.js`. Rejected — Conventional Commits is an external standard with roughly seventy type/case/length rules, well past the twenty-line threshold in ER-049, and a hand-copied ruleset silently drifts from the standard it claims to implement.
-
-**Maintenance and licence:** MIT, same monorepo and release train as `@commitlint/cli`, so its major must be kept equal to the CLI's. Transitive tree: `@commitlint/types` and `conventional-changelog-conventionalcommits`, both dev-only.
 
 ---
 
@@ -287,6 +259,12 @@ Recorded so the discussion is not reopened without new information.
 
 **Prohibited licences:** AGPL, SSPL, and any source-available licence restricting commercial use — on-premise distribution to customers makes this a live legal question, not a theoretical one.
 
-**Version pinning:** exact versions in `package.json`, lockfile committed, `pnpm install --frozen-lockfile` in CI. No `^` or `~` ranges. A transitive update that changes behaviour must be a deliberate, reviewable commit.
+**Version pinning (D-045).** Exact versions in `package.json`, lockfile committed, `pnpm install --frozen-lockfile` in CI. No `^` or `~` ranges.
+
+**Version tables in this document give the class, not a frozen number.** Dev tooling — linters, formatters, test runners, git hooks — installs at **latest stable at install time**, exact-pinned, with the resolution date recorded in the entry. Runtime dependencies stay conservative and move deliberately.
+
+**Standing exception:** TypeScript remains on latest 5.x until `typescript-eslint` and Drizzle both officially support TypeScript 7. Re-evaluate at the end of Phase 1.
+
+`syncpack` was listed here and **is not installed** — it enforces version consistency across workspace packages, and there is one package (D-018, one package with two bootstraps). Removed rather than left as a phantom requirement.
 
 **Review cadence:** monthly for updates, immediately for any advisory rated high or critical.

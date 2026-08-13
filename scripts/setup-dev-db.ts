@@ -170,10 +170,12 @@ OPS_PORT=9464
 DATABASE_URL=${buildUrl('findneo_app', appPassword, DEV_DATABASE)}
 DATABASE_POOL_MAX=10
 
-# Tests use Testcontainers by default. Uncomment to run against the native
+# Tests use Testcontainers by default. Uncomment BOTH to run against the native
 # ${TEST_DATABASE} database instead — the loader refuses any test database
-# whose name does not end in "_test".
+# whose name does not end in "_test". The owner connection creates fixtures and
+# proves seeded rows exist; the app connection is what RLS assertions run as.
 # DATABASE_URL_TEST=${buildUrl('findneo_app', appPassword, TEST_DATABASE)}
+# DATABASE_URL_TEST_OWNER=${buildUrl(MIGRATOR_ROLE, migratorPassword, TEST_DATABASE)}
 
 # Migration tooling only. The application config loader deliberately does NOT
 # read this — the API and worker must never hold table-owner credentials.

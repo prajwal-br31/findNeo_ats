@@ -72,6 +72,11 @@ const EXPECTED_VIOLATIONS: readonly ExpectedViolation[] = [
     rule: 'boundaries/external',
     why: 'ER-004 — application layer imports an HTTP type',
   },
+  {
+    file: 'modules/example/infrastructure/bad-imports-db-client.ts',
+    rule: 'boundaries/entry-point',
+    why: "D-044 — reaching past platform/db's entry point to the raw client",
+  },
 ];
 
 /** Legal code that must lint clean, so a blanket-deny config cannot pass. */
@@ -79,6 +84,8 @@ const CONTROLS: readonly string[] = [
   'bff/web/good-bff-imports-application.ts',
   'modules/example/application/good-imports-own-repository.ts',
   'modules/other/application/good-cross-module-service.ts',
+  'modules/example/application/good-imports-uow-port.ts',
+  'modules/example/infrastructure/good-imports-tx-scope.ts',
 ];
 
 function toFixtureRelativePath(absolutePath: string): string {

@@ -45,6 +45,20 @@ No Drizzle, no Fastify, no pg-boss, no adapter, no `platform/`. A domain file th
 ### ER-004 — Application and domain layers never import HTTP types
 No `FastifyRequest`, no `FastifyReply`, no `req`, no `res`. They receive a plain `RequestContext` and typed input. This is what makes worker reuse possible.
 
+### ER-004a — Transactions reach the application layer through a port, never the ORM
+An application service opens a transaction via `UnitOfWorkPort` and receives an opaque `TxScope` (D-044). It passes that scope to repositories and **never dereferences it**. No application or domain file imports Drizzle, `platform/db`, or any database type.
+
+```ts
+// correct — application layer
+await this.uow.withTenant(ctx.companyId, async (tx) => {
+  const job = await this.jobRepo.create(tx, input);
+  await this.outboxRepo.write(tx, 'job.created', { jobId: job.id });
+  await this.queue.enqueue(tx, 'communication', 'notify.job_created', { … });
+});
+```
+
+`platform/db` carries an entry-point restriction exposing only the port implementation.
+
 ### ER-005 — Repositories only access the database
 Query construction and row mapping, in `infrastructure/`. No business rules, no permission checks, no cross-module calls, no HTTP, no queue.
 
@@ -274,6 +288,11 @@ Token and hash comparison uses a timing-safe comparison, never `===`.
 ---
 
 ## 9. Testing
+
+### ER-052a — A linter that cannot resolve an import is a linter that is not running **[SECURITY]**
+Layer rules classify dependencies by resolved path. An unresolved import is silently unclassified, so `boundaries/element-types` stops firing and violations pass review looking clean.
+
+Therefore: `boundaries/no-unknown` is an **error**, not a warning; and CI runs a verification script asserting that each layer rule still fires against a deliberately planted violation. A passing lint run is not evidence the rules are active — only the planted-violation check is.
 
 ### ER-053 — Tests run against real PostgreSQL
 Testcontainers. RLS policies, triggers, and partial indexes cannot be tested against a mock, and those are exactly the mechanisms enforcing the security model.

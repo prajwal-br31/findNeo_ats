@@ -27,7 +27,7 @@ Authority: `00-decisions.md`. Where this document and the uploaded `Database_des
 
 ## 2. Database roles and the RLS pattern
 
-Three PostgreSQL roles, none of them superuser, none of them the table owner. Table owner is a separate migration role that never serves traffic.
+Three PostgreSQL application roles, none of them superuser, none of them the table owner. The table owner is **`findneo_migrator`** — a separate role that runs migrations and never serves traffic. Ratified name; use it everywhere.
 
 | Role | Used by | Grants |
 |---|---|---|

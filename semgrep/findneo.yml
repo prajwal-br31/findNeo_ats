@@ -67,6 +67,17 @@ rules:
       exclude:
         - '**/src/platform/**'
         - '**/scripts/**'
+    # SCOPE. This rule covers exactly what 05a §9 rule 3 names — pg-boss, S3,
+    # SMTP and the cache — plus `pg`, whose pool belongs in platform/db.
+    #
+    # `drizzle-orm` is deliberately NOT here. ER-008 puts "Drizzle queries" in
+    # infrastructure/, so repositories must import it; a path-based rule cannot
+    # express "everywhere except infrastructure" without excluding the layer
+    # that most needs watching. Drizzle placement is enforced instead by
+    # eslint.boundaries.js, which is element-aware: the external rule denies it
+    # to bff, controller, application, module-support, shared and worker, and
+    # ER-003b denies the domain layer every external package.
+    #
     # Matched textually rather than structurally: `import ... from 'x'` is not a
     # valid Semgrep pattern for JS/TS, and enumerating every import form
     # (default, named, namespace, type-only, side-effect) for every package
@@ -80,10 +91,10 @@ rules:
     #   4. dynamic    await import('pg')
     # The package alternation is identical in all four and must stay that way.
     pattern-either:
-      - pattern-regex: (?m)^\s*import\s[^;]*?from\s*['"](?:pg|pg-boss|nodemailer|lru-cache|drizzle-orm|drizzle-kit|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]
-      - pattern-regex: (?m)^\s*import\s+['"](?:pg|pg-boss|nodemailer|lru-cache|drizzle-orm|drizzle-kit|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]
-      - pattern-regex: require\(\s*['"](?:pg|pg-boss|nodemailer|lru-cache|drizzle-orm|drizzle-kit|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]\s*\)
-      - pattern-regex: (?<!\w)import\(\s*['"](?:pg|pg-boss|nodemailer|lru-cache|drizzle-orm|drizzle-kit|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]\s*\)
+      - pattern-regex: (?m)^\s*import\s[^;]*?from\s*['"](?:pg|pg-boss|nodemailer|lru-cache|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]
+      - pattern-regex: (?m)^\s*import\s+['"](?:pg|pg-boss|nodemailer|lru-cache|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]
+      - pattern-regex: require\(\s*['"](?:pg|pg-boss|nodemailer|lru-cache|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]\s*\)
+      - pattern-regex: (?<!\w)import\(\s*['"](?:pg|pg-boss|nodemailer|lru-cache|@aws-sdk/[\w.-]+)(?:/[\w./-]+)?['"]\s*\)
 
   # 4 ── ER-025 / SEC-031
   - id: findneo-spread-into-response

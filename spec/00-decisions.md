@@ -55,6 +55,8 @@ When any other document, prior chat transcript, or session extraction disagrees 
 | D-041 | Scale posture: shard-ready, not sharded | Accepted |
 | D-042 | Calendar and interview scheduling owned by another team | Accepted |
 | D-043 | Career site: hosted page in v1, embed widget Phase 2 | Accepted |
+| D-044 | Unit of Work port — transactions without leaking the ORM upward | Accepted |
+| D-045 | Version policy: dev tooling tracks current, runtime stays conservative | Accepted |
 
 ---
 
@@ -496,6 +498,53 @@ Calendar integration, slot proposal, and interview scheduling are being built by
 **Kept minimal in v1:** CORS on public routes is restricted to the FindNeo career-page origin. The per-company embedding-origin allowlist is **not** built — it arrives with the embed. No `frame-ancestors` allowlist table, no public script asset, no versioned CDN bundle.
 
 **Consequences:** Phase 4 is smaller than originally scoped. The tenant onboarding flow must surface the hosted career page URL, since in v1 that is the only place candidates can apply.
+
+---
+
+### D-044 — Unit of Work port
+**Accepted.** Resolves the tension between ER-003 (application services own transaction boundaries) and ER-006 (no database access outside a repository).
+
+An application service must be able to say "run these repository calls in one transaction with tenant context bound" without importing the ORM.
+
+**Mechanism:**
+- `UnitOfWorkPort` and an **opaque** `TxScope` type are declared in `shared/` — not in `platform/`.
+- `platform/db` is the only code that knows `TxScope` is a Drizzle transaction client.
+- Application services depend on `shared/`, call `uow.withTenant(companyId, fn)`, and receive a `TxScope` they pass to repositories but never dereference.
+- Repositories, in `infrastructure/`, accept `TxScope` and unwrap it.
+
+```ts
+// shared/ports/unit-of-work.ts
+export type TxScope = { readonly __brand: 'TxScope' };
+export interface UnitOfWorkPort {
+  withTenant<T>(companyId: CompanyId, fn: (tx: TxScope) => Promise<T>): Promise<T>;
+  withoutTenant<T>(fn: (tx: TxScope) => Promise<T>): Promise<T>;  // signup, platform ops
+}
+```
+
+**Consequences:**
+- `application → platform/db` stays **denied** in the boundaries config. The conflict was in the rules, not the config.
+- `platform/db` additionally carries an `entry-point` restriction exposing only its port implementation, so infrastructure cannot reach past it either.
+- The container in `bootstrap/` wires the implementation. Bootstrap may import everything; nothing else may.
+- Tests fake `UnitOfWorkPort` trivially, which makes application services testable without a database while repositories keep their real-Postgres tests.
+
+**Rejected: AsyncLocalStorage.** It works and reads more cleanly, but it makes "am I inside a transaction with tenant context bound?" implicit. That is the one question in this codebase that must never be implicit, and an ALS miss fails silently rather than loudly.
+
+---
+
+### D-045 — Version policy
+**Accepted.** Replaces blanket major-version pinning.
+
+| Class | Policy |
+|---|---|
+| Dev tooling (linters, formatters, test runners, hooks) | **Latest stable at install time.** Exact-pinned, with the install date recorded |
+| Runtime dependencies | Conservative. A major upgrade is a deliberate, reviewed change |
+| Language and framework (TypeScript, Node, Fastify, Drizzle) | Latest stable **minus ecosystem risk** — verify the toolchain around it supports the version before moving |
+
+**Why:** hard-coding a major version in a specification guarantees drift, and being two majors behind on a linter means missing rules that exist to catch the mistakes this architecture invites. Dev tooling carries near-zero production risk, so it should track current.
+
+**Standing exception recorded now:** TypeScript stays on latest 5.x until `typescript-eslint` and Drizzle both officially support TypeScript 7. The risk is not the compiler; it is type inference in the two tools the whole codebase depends on. Re-evaluate at the end of Phase 1 and propose a decision entry.
+
+**Exact pinning still applies.** No `^`, no `~`, lockfile committed, `--frozen-lockfile` in CI. "Latest at install" means resolved once, recorded, and changed deliberately.
 
 ---
 
