@@ -123,6 +123,24 @@ ALTER DEFAULT PRIVILEGES FOR ROLE findneo_migrator IN SCHEMA public
   GRANT SELECT, INSERT ON TABLES TO findneo_app;
 --> statement-breakpoint
 
+-- `/health/startup` must answer "have migrations been applied?" (12 §4), and
+-- the process that answers it holds app credentials only — by design, since a
+-- serving process must never hold the migrator's. Reading the migration
+-- bookkeeping is the one thing it needs and cannot otherwise do.
+--
+-- Read-only, one schema, no tenant data: this table records which migrations
+-- ran, nothing about anybody. Guarded because the schema is created by the
+-- migration runner and may not exist when this file is applied by hand.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
+    GRANT USAGE ON SCHEMA drizzle TO findneo_app;
+    GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO findneo_app;
+  END IF;
+END
+$$;
+--> statement-breakpoint
+
 -- `findneo_public` and `findneo_platform` receive no default privileges at
 -- all. The public role's blast radius is bounded by grants rather than by
 -- handler correctness (06 §2), so each of its grants is written out, one

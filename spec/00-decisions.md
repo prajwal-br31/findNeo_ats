@@ -451,7 +451,18 @@ No per-tenant queues — at scale that is an unbounded number of queues, and pg-
 
 **Mechanism:** `QueuePort`'s fetch path applies a per-tenant concurrency cap rather than taking the next N jobs by age. A tenant already at its cap is skipped and the next tenant's work is taken.
 
-**This is not pg-boss default behaviour.** It requires a custom claim query. It lives entirely in the adapter, so no job handler and no business logic knows it exists.
+**This is not pg-boss default behaviour.** It requires a custom claim query against pg-boss's job table — which is **not a public API**. It lives entirely in the adapter, so no job handler and no business logic knows it exists.
+
+**Required guards, because an internal dependency that fails silently is the worst kind:**
+
+1. **Exact version pin** on pg-boss. No range, ever (D-045 does not relax this — pg-boss is a runtime dependency).
+2. **A schema-shape control-integrity assertion** (`11` §3a) that reads pg-boss's job table definition and fails CI if the columns the claim query depends on change name, type, or nullability. An upgrade must break the build, not the fairness guarantee.
+3. **A behavioural assertion** that one tenant flooding a domain does not stall another tenant's jobs in that same domain — the Phase 0 gate item. This is the test that proves fairness is actually working, independent of how it is implemented.
+4. **Isolation in the adapter** such that the claim strategy can be swapped without touching a handler.
+
+**Documented fallback if the claim query proves too fragile across versions:** hash-partition each domain into N sub-queues by `companyId` (`ai.0` … `ai.7`), routing on hash. Uses only pg-boss's public API. A flooding tenant then occupies one partition rather than the whole domain. It is weaker — tenants sharing a partition can still contend, and N is a fixed guess — but it degrades gracefully and depends on nothing internal.
+
+Take the claim query first, with guards 1–4. Fall back to partitioning only if the guards prove unsustainable, and record that as a new decision rather than a quiet substitution.
 
 **Why it is not deferrable:** without it, one tenant's bulk import occupies every worker slot and every other tenant's notifications stop. That is a full outage from one tenant's ordinary action, and it is the single most likely multi-tenant availability incident.
 
