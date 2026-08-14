@@ -32,6 +32,8 @@ export interface IdentityRouteOptions {
   readonly devEmailReader?: () => unknown;
   /** Sets the refresh cookie. Injected so the module owns no cookie policy. */
   readonly setRefreshCookie: (reply: unknown, token: string) => void;
+  readonly readRefreshCookie: (request: unknown) => string | undefined;
+  readonly clearRefreshCookie: (reply: unknown) => void;
   /**
    * Reads the authenticated caller off the request. Injected so the module
    * does not depend on how authentication is carried (ER-004).
@@ -219,8 +221,85 @@ function registerEnableMfa(app: FastifyInstance, options: IdentityRouteOptions):
   );
 }
 
+/**
+ * Refresh and logout (T-026).
+ *
+ * Cookie-authenticated, so both are `public` in SEC-021 terms — the caller
+ * presents a refresh cookie rather than a bearer token, and requiring a valid
+ * access token to refresh an expired one is circular.
+ */
+function registerRefresh(app: FastifyInstance, options: IdentityRouteOptions): void {
+  const { controller, readRefreshCookie } = options;
+
+  app.post(
+    '/v1/auth/refresh',
+    {
+      config: {
+        findneo: {
+          public: true as const,
+          publicReason:
+            'Cookie-authenticated. Requiring a live access token to refresh an expired one is ' +
+            'circular; the refresh token is the credential.',
+        },
+      },
+      schema: {
+        tags: ['auth'],
+        summary: 'Rotate the refresh token and issue a new access token',
+        response: { 200: LoginResponse },
+      },
+    },
+    async (request, reply) => {
+      const token = readRefreshCookie(request);
+      const result = await controller.refresh(token ?? '', {
+        ipAddress: request.ip,
+        deviceInfo: request.headers['user-agent'] ?? null,
+      });
+
+      options.setRefreshCookie(reply, result.refreshToken);
+      await reply.status(200).send({
+        accessToken: result.accessToken,
+        expiresAt: result.expiresAt.toISOString(),
+        user: {
+          id: result.user.id,
+          email: result.user.email,
+          fullName: result.user.fullName,
+          companyId: result.user.companyId,
+        },
+      });
+    },
+  );
+}
+
+function registerLogout(app: FastifyInstance, options: IdentityRouteOptions): void {
+  const { controller, readRefreshCookie, clearRefreshCookie } = options;
+
+  app.post(
+    '/v1/auth/logout',
+    {
+      config: {
+        findneo: {
+          public: true as const,
+          publicReason: 'Cookie-authenticated, and must succeed for a client holding anything.',
+        },
+      },
+      schema: { tags: ['auth'], summary: 'Revoke this session', response: { 204: Type.Null() } },
+    },
+    async (request, reply) => {
+      const token = readRefreshCookie(request);
+      if (token !== undefined) await controller.logout(token);
+
+      /* Cleared regardless. A logout that leaves the cookie in place looks
+         successful and leaves the browser replaying a dead token. */
+      clearRefreshCookie(reply);
+      await reply.status(204).send();
+    },
+  );
+}
+
 export function registerIdentityRoutes(app: FastifyInstance, options: IdentityRouteOptions): void {
   registerSignup(app, options);
+  registerRefresh(app, options);
+  registerLogout(app, options);
   registerEnableMfa(app, options);
   registerLogin(app, options);
   registerVerifyEmail(app, options);

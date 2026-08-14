@@ -113,6 +113,27 @@
       "when": 1786612917996,
       "tag": "0018_invitation_token_lookup",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786612977996,
+      "tag": "0019_session_token_lookup",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1786613037996,
+      "tag": "0020_roles_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786613097996,
+      "tag": "0021_impersonation_grants",
+      "breakpoints": true
     }
   ]
 }

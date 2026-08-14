@@ -1,11 +1,7 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { AppError } from '../../../shared/errors/app-error.js';
-import type { ClockPort } from '../../../shared/ports/clock.js';
-import type { PasswordHasherPort } from '../../../shared/ports/password-hasher.js';
-import type { QueuePort } from '../../../shared/ports/queue.js';
-import type { TokenIssuerPort } from '../../../shared/ports/token-issuer.js';
-import type { TxScope, UnitOfWorkPort } from '../../../shared/ports/unit-of-work.js';
+import type { TxScope } from '../../../shared/ports/unit-of-work.js';
 import {
   unsafeCompanyId,
   unsafeUserId,
@@ -14,7 +10,24 @@ import {
 } from '../../../shared/types/ids.js';
 import { authenticationFailed, reservedSlug, slugUnavailable } from '../identity.errors.js';
 import { RESERVED_SLUGS } from '../identity.schemas.js';
-import type { AuthUserRow, IdentityRepository } from '../infrastructure/identity.repository.js';
+import { hashToken, isUniqueViolation, newToken } from './token-utils.js';
+import type {
+  AuthServiceDeps,
+  LoginResult,
+  RequestMeta,
+  SignupInput,
+  SignupResult,
+} from './auth.types.js';
+
+export type {
+  AuthServiceDeps,
+  LoginResult,
+  MfaAdapters,
+  RequestMeta,
+  SignupInput,
+  SignupResult,
+} from './auth.types.js';
+import type { AuthUserRow, SessionRow } from '../infrastructure/identity.repository.js';
 
 /**
  * Authentication (08 §3, §5).
@@ -33,89 +46,6 @@ export const REFRESH_TOKEN_TTL_DAYS = 30;
 
 /** Email-verification token lifetime. */
 const VERIFICATION_TTL_HOURS = 24;
-
-export interface SignupInput {
-  readonly companyName: string;
-  readonly slug: string;
-  readonly countryCode: string;
-  readonly fullName: string;
-  readonly email: string;
-  readonly password: string;
-}
-
-export interface SignupResult {
-  readonly companyId: CompanyId;
-  readonly userId: UserId;
-  /** Raw token. Returned only so dev tooling can surface it; never logged. */
-  readonly verificationToken: string;
-}
-
-export interface RequestMeta {
-  readonly ipAddress: string | null;
-  readonly deviceInfo: string | null;
-}
-
-export interface LoginResult {
-  readonly accessToken: string;
-  readonly expiresAt: Date;
-  readonly refreshToken: string;
-  readonly user: { id: UserId; email: string; fullName: string; companyId: CompanyId };
-}
-
-export interface AuthServiceDeps {
-  readonly uow: UnitOfWorkPort;
-  readonly repository: IdentityRepository;
-  readonly hasher: PasswordHasherPort;
-  readonly tokens: TokenIssuerPort;
-  readonly queue: QueuePort;
-  readonly clock: ClockPort;
-  /** A real argon2 hash matching no password. See `dummyPasswordHash`. */
-  readonly dummyHash: () => Promise<string>;
-  readonly mfa: MfaAdapters;
-}
-
-/**
- * TOTP and secret encryption, injected rather than imported.
- *
- * `otpauth` and node crypto both live in `platform/`, so the application layer
- * reaches them through this shape instead of importing them directly (ER-011).
- */
-export interface MfaAdapters {
-  begin(label: string): { secret: string; uri: string };
-  verify(secret: string, label: string, code: string): boolean;
-  encrypt(plaintext: string): string;
-  decrypt(envelope: string): string;
-}
-
-/** Tokens are stored hashed and compared by hash (ER-047). */
-function hashToken(raw: string): string {
-  return createHash('sha256').update(raw).digest('hex');
-}
-
-function newToken(): string {
-  /* 32 bytes of CSPRNG output. Not a UUID: a UUIDv4 carries 122 bits and is
-     structured, and this is a bearer credential. */
-  return randomBytes(32).toString('base64url');
-}
-
-/**
- * True for a specific unique-constraint violation.
- *
- * Walks the `cause` chain: Drizzle wraps the driver error in a
- * `DrizzleQueryError`, so `code` and `constraint` are one or two levels down.
- * Reading them off the top-level object silently never matches, which turns
- * the intended 422 into a 500 — and a 500 that looks exactly like a bug
- * because it is one.
- */
-function isUniqueViolation(error: unknown, constraint: string): boolean {
-  let current: unknown = error;
-  for (let depth = 0; depth < 5 && current !== null && current !== undefined; depth += 1) {
-    const candidate = current as { code?: unknown; constraint?: unknown; cause?: unknown };
-    if (candidate.code === '23505' && candidate.constraint === constraint) return true;
-    current = candidate.cause;
-  }
-  return false;
-}
 
 export class AuthService {
   readonly #deps: AuthServiceDeps;
@@ -303,6 +233,134 @@ export class AuthService {
       if (isUniqueViolation(error, 'uq_companies_slug')) throw slugUnavailable();
       throw error;
     }
+  }
+
+  /**
+   * Refresh with rotation and family revocation (T-026, 08 §3).
+   *
+   * Step 3 is the whole point. A refresh token that has already been rotated
+   * can only have been replayed, and a replay means the token was stolen — so
+   * the entire family is revoked and the legitimate holder is logged out
+   * deliberately. Leaving their session alive would mean sharing the account
+   * with whoever stole it, silently.
+   *
+   * One transaction (08 §5): the old session is revoked and the new one
+   * created atomically, so a crash between them cannot leave two live tokens
+   * in a family or none at all.
+   */
+  async refresh(refreshToken: string, meta: RequestMeta): Promise<LoginResult> {
+    const { uow, repository, clock } = this.#deps;
+
+    const outcome = await uow.withNewTenant<LoginResult | { replayedFamily: string | null }>(
+      async (tx: TxScope, bind) => {
+        const session = await repository.findSessionByTokenHash(tx, hashToken(refreshToken));
+        if (session === undefined) return { replayedFamily: null };
+
+        /* Already revoked means one of two things: a normal logout, or a token
+           that was rotated and is now being presented again. Both are treated
+           as reuse, because from here they are indistinguishable and the
+           expensive mistake is the wrong one. */
+        if (session.revokedAt !== null) return { replayedFamily: session.familyId };
+
+        if (new Date(session.expiresAt).getTime() <= clock.now().getTime()) {
+          return { replayedFamily: null };
+        }
+
+        /* Platform sessions carry no company and are served by the platform
+           surface, not this route. */
+        if (session.companyId === null) return { replayedFamily: null };
+
+        const companyId = unsafeCompanyId(session.companyId);
+        await bind(companyId);
+
+        /* Revoke-then-create, and the revoke is conditional on the row still
+           being live: two concurrent refreshes with one token both read it as
+           valid, and only one gets rowCount 1. The loser reports reuse, which
+           is exactly right — one of the two callers is holding a copy. */
+        const revoked = await repository.revokeSession(tx, session.id);
+        if (revoked !== 1) return { replayedFamily: session.familyId };
+
+        const newRefresh = newToken();
+        const created = await repository.insertRotatedSession(tx, {
+          userId: unsafeUserId(session.userId),
+          companyId,
+          /* Same family: the chain is what makes reuse detectable. */
+          familyId: session.familyId,
+          refreshTokenHash: hashToken(newRefresh),
+          expiresAt: new Date(clock.now().getTime() + REFRESH_TOKEN_TTL_DAYS * 86_400_000),
+          ipAddress: meta.ipAddress,
+          deviceInfo: meta.deviceInfo,
+          rotatedFromId: session.id,
+        });
+
+        return this.#rotatedResult(tx, session, companyId, created.id, newRefresh);
+      },
+    );
+
+    if (!('replayedFamily' in outcome)) return outcome;
+
+    /* Revoked in its own committed transaction, for the same reason the
+       lockout counter is: the outer transaction is about to end in a thrown
+       401, and a rollback would undo the revocation — leaving a known-stolen
+       token family live. */
+    if (outcome.replayedFamily !== null) {
+      const family = outcome.replayedFamily;
+      await uow.withoutTenant(async (tx: TxScope) => {
+        await repository.revokeSessionFamily(tx, family);
+      });
+    }
+
+    throw authenticationFailed();
+  }
+
+  /** Mints the access token and response body for a rotated session. */
+  async #rotatedResult(
+    tx: TxScope,
+    session: SessionRow,
+    companyId: CompanyId,
+    sessionId: string,
+    newRefresh: string,
+  ): Promise<LoginResult> {
+    const { repository, tokens } = this.#deps;
+    const userId = unsafeUserId(session.userId);
+
+    const issued = await tokens.issueAccessToken({
+      sub: userId,
+      sid: sessionId,
+      cid: companyId,
+      cap: session.activeCapability,
+    });
+
+    const fullName = await repository.findFullName(tx, userId);
+    const email = await repository.findEmail(tx, userId);
+
+    return {
+      accessToken: issued.token,
+      expiresAt: issued.expiresAt,
+      refreshToken: newRefresh,
+      user: { id: userId, email, fullName, companyId },
+    };
+  }
+
+  /**
+   * Logout. Revokes the presented session only, never the family.
+   *
+   * Signing out of one device must not sign you out of the others — that is
+   * what makes family revocation meaningful as a theft signal rather than
+   * routine noise.
+   */
+  async logout(refreshToken: string): Promise<void> {
+    const { uow, repository } = this.#deps;
+
+    await uow.withNewTenant(async (tx: TxScope, bind) => {
+      const session = await repository.findSessionByTokenHash(tx, hashToken(refreshToken));
+      /* Idempotent and silent. An unknown token is not an error worth
+         reporting: logout must succeed for a client holding anything. */
+      if (session === undefined || session.companyId === null) return;
+
+      await bind(unsafeCompanyId(session.companyId));
+      await repository.revokeSession(tx, session.id);
+    });
   }
 
   /**

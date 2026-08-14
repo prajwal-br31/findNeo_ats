@@ -54,6 +54,16 @@ export interface InsertUserInput {
   readonly passwordHash: string;
 }
 
+export interface SessionRow extends Record<string, unknown> {
+  readonly id: string;
+  readonly userId: string;
+  readonly companyId: string | null;
+  readonly familyId: string;
+  readonly activeCapability: number;
+  readonly expiresAt: Date | string;
+  readonly revokedAt: Date | string | null;
+}
+
 export interface InsertSessionInput {
   readonly userId: UserId;
   readonly companyId: CompanyId;
@@ -135,6 +145,106 @@ export class IdentityRepository {
    * the caller can fail loudly when the catalog was never seeded, rather than
    * creating an owner with no permissions at all.
    */
+  /**
+   * Resolves a session from its refresh-token hash, untenanted.
+   *
+   * Refresh is cookie-authenticated: the token is all the caller presents, so
+   * nothing has bound a tenant when this runs. Goes through the SECURITY
+   * DEFINER function in migration 019 for the same reason as the login lookup.
+   */
+  async findSessionByTokenHash(tx: TxScope, tokenHash: string): Promise<SessionRow | undefined> {
+    const result = await unwrapTxScope(tx).execute<SessionRow>(sql`
+      select id, user_id as "userId", company_id as "companyId", family_id as "familyId",
+             active_capability as "activeCapability", expires_at as "expiresAt",
+             revoked_at as "revokedAt"
+        from session_lookup_by_token(${tokenHash})
+    `);
+    return result.rows[0];
+  }
+
+  /**
+   * Revokes every live session in a family. The reuse-detection response.
+   *
+   * Returns the count so the caller can log that a replay happened — the
+   * number of sessions killed is the blast radius of the theft, and it is the
+   * one thing worth recording about the event.
+   */
+  async revokeSessionFamily(tx: TxScope, familyId: string): Promise<number> {
+    const result = await unwrapTxScope(tx).execute<{ count: number }>(sql`
+      select session_revoke_family(${familyId}) as count
+    `);
+    return result.rows[0]?.count ?? 0;
+  }
+
+  /**
+   * Revokes one session, but only if it is still live.
+   *
+   * The `revoked_at is null` predicate is the concurrency control: two
+   * simultaneous refreshes with the same token both read it as valid, and
+   * exactly one revokes it. The loser sees 0 and treats it as reuse.
+   */
+  async revokeSession(tx: TxScope, sessionId: string): Promise<number> {
+    const result = await unwrapTxScope(tx).execute(sql`
+      update sessions set revoked_at = now()
+       where id = ${sessionId} and revoked_at is null
+    `);
+    return result.rowCount ?? 0;
+  }
+
+  /** A rotated session: same family, pointing back at its predecessor. */
+  async insertRotatedSession(
+    tx: TxScope,
+    input: InsertSessionInput & { readonly rotatedFromId: string },
+  ): Promise<{ id: string }> {
+    const result = await unwrapTxScope(tx).execute<{ id: string }>(sql`
+      insert into sessions (user_id, company_id, family_id, refresh_token_hash,
+                            expires_at, ip_address, device_info, rotated_from_id)
+      values (${input.userId}, ${input.companyId}, ${input.familyId}, ${input.refreshTokenHash},
+              ${input.expiresAt}, ${input.ipAddress}::inet, ${input.deviceInfo},
+              ${input.rotatedFromId})
+      returning id
+    `);
+
+    const row = result.rows[0];
+    if (row === undefined) throw new Error('session insert returned no row');
+    return row;
+  }
+
+  /**
+   * Resolves a user's permission keys through their role assignments.
+   *
+   * `user_roles -> role_permissions -> permissions` (08 §3). Platform-default
+   * roles and company custom roles are additive — a union, never an override —
+   * so a person holding both gets the sum.
+   */
+  async resolvePermissionKeys(tx: TxScope, userId: UserId): Promise<string[]> {
+    const result = await unwrapTxScope(tx).execute<{ key: string }>(sql`
+      select distinct p.key
+        from user_roles ur
+        join role_permissions rp on rp.role_id = ur.role_id
+        join permissions p on p.id = rp.permission_id
+       where ur.user_id = ${userId}
+       order by p.key
+    `);
+    return result.rows.map((row) => row.key);
+  }
+
+  /** The departments a user belongs to — the `◐` scope in 04 §4. */
+  async departmentIdsFor(tx: TxScope, userId: UserId): Promise<string[]> {
+    const result = await unwrapTxScope(tx).execute<{ departmentId: string }>(sql`
+      select department_id as "departmentId" from user_departments where user_id = ${userId}
+    `);
+    return result.rows.map((row) => row.departmentId);
+  }
+
+  /** The cache key's version component (08 §3). */
+  async rolesVersion(tx: TxScope, companyId: CompanyId): Promise<number> {
+    const result = await unwrapTxScope(tx).execute<{ version: number }>(sql`
+      select roles_version as version from companies where id = ${companyId}
+    `);
+    return result.rows[0]?.version ?? 0;
+  }
+
   /** Assigns a role already resolved to an id — the invitation-accept path. */
   async assignRoleById(
     tx: TxScope,

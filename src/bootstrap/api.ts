@@ -14,11 +14,15 @@ import { randomUUID } from 'node:crypto';
 
 import type { AuthController } from '../modules/identity/auth.controller.js';
 import { registerIdentityRoutes } from '../modules/identity/identity.routes.js';
+import type { AccessController } from '../modules/identity/access.controller.js';
+import { registerAccessRoutes } from '../modules/identity/access.routes.js';
+import type { PermissionsService } from '../modules/identity/application/permissions.service.js';
 import type { InvitationsController } from '../modules/identity/invitations.controller.js';
 import { registerInvitationRoutes } from '../modules/identity/invitations.routes.js';
 import type { Config } from '../platform/config/config.types.js';
 import type { TokenVerifierPort } from '../shared/ports/token-issuer.js';
 import { registerAuthentication, requireAuth } from './authentication.js';
+import { registerAuthorization } from './authorization.js';
 import { describeForLog, toProblemDetails } from '../shared/errors/problem-details.js';
 import {
   assertRouteMetadata,
@@ -175,6 +179,11 @@ function registerModules(app: FastifyInstance, config: Config, deps: ApiDependen
     setRefreshCookie: (reply, token) => {
       setRefreshCookie(reply as FastifyReply, token, config);
     },
+    readRefreshCookie: (request) =>
+      (request as FastifyRequest).cookies[REFRESH_COOKIE_NAME] ?? undefined,
+    clearRefreshCookie: (reply) => {
+      void (reply as FastifyReply).clearCookie(REFRESH_COOKIE_NAME, { path: '/v1/auth' });
+    },
     ...(deps.captureVerificationToken === undefined
       ? {}
       : { onVerificationToken: deps.captureVerificationToken }),
@@ -188,11 +197,26 @@ function registerModules(app: FastifyInstance, config: Config, deps: ApiDependen
       return { companyId: auth.companyId, userId: auth.userId };
     },
   });
+
+  registerAccessRoutes(app, {
+    controller: deps.accessController,
+    currentUser: (request) => {
+      const auth = requireAuth(request as FastifyRequest);
+      return { companyId: auth.companyId, userId: auth.userId };
+    },
+    traceId: (request) => (request as FastifyRequest).id,
+  });
+
+  /* Registered last so it runs after authentication: the hook order is what
+     makes `request.auth` available to the permission check. */
+  registerAuthorization(app, deps.permissionsService);
 }
 
 export interface ApiDependencies {
   readonly authController: AuthController;
   readonly invitationsController: InvitationsController;
+  readonly accessController: AccessController;
+  readonly permissionsService: PermissionsService;
   /**
    * The application logger.
    *

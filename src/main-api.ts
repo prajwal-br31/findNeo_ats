@@ -40,6 +40,8 @@ const isDevelopment = config.nodeEnv === 'development';
 const api = await buildApiServer(config, {
   authController: container.authController,
   invitationsController: container.invitationsController,
+  accessController: container.accessController,
+  permissionsService: container.permissionsService,
   tokenVerifier: container.tokenVerifier,
   logger,
   ...(isDevelopment

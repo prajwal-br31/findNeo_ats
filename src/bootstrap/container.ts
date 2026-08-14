@@ -30,6 +30,16 @@ import { IdentityRepository } from '../modules/identity/infrastructure/identity.
 import { InvitationsService } from '../modules/identity/application/invitations.service.js';
 import { InvitationsController } from '../modules/identity/invitations.controller.js';
 import { InvitationsRepository } from '../modules/identity/infrastructure/invitations.repository.js';
+import { AccessController } from '../modules/identity/access.controller.js';
+import { DepartmentsService } from '../modules/identity/application/departments.service.js';
+import { FieldVisibilityService } from '../modules/identity/application/field-visibility.service.js';
+import { PermissionsService } from '../modules/identity/application/permissions.service.js';
+import { PlatformService } from '../modules/identity/application/platform.service.js';
+import { RolesService } from '../modules/identity/application/roles.service.js';
+import { DepartmentsRepository } from '../modules/identity/infrastructure/departments.repository.js';
+import { FieldVisibilityRepository } from '../modules/identity/infrastructure/field-visibility.repository.js';
+import { PlatformRepository } from '../modules/identity/infrastructure/platform.repository.js';
+import { RolesRepository } from '../modules/identity/infrastructure/roles.repository.js';
 
 /**
  * The composition root (ER-008).
@@ -53,6 +63,9 @@ export interface Container {
   readonly tokenVerifier: TokenVerifierPort;
   readonly authController: AuthController;
   readonly invitationsController: InvitationsController;
+  readonly accessController: AccessController;
+  readonly permissionsService: PermissionsService;
+  readonly fieldVisibility: FieldVisibilityService;
   close(): Promise<void>;
 }
 
@@ -171,6 +184,41 @@ function buildInvitations(
   );
 }
 
+interface AccessGraph {
+  readonly controller: AccessController;
+  readonly permissions: PermissionsService;
+  readonly fieldVisibility: FieldVisibilityService;
+}
+
+/** Departments, roles, permissions, masking and the platform surface. */
+function buildAccess(
+  database: UnitOfWorkHandle,
+  cache: LruCacheAdapter,
+  clock: SystemClock,
+): AccessGraph {
+  const permissions = new PermissionsService({
+    uow: database.uow,
+    repository: new IdentityRepository(),
+    cache,
+  });
+
+  const controller = new AccessController(
+    new DepartmentsService({ uow: database.uow, repository: new DepartmentsRepository() }),
+    new RolesService({ uow: database.uow, repository: new RolesRepository(), permissions }),
+    new PlatformService({ uow: database.uow, repository: new PlatformRepository(), clock }),
+  );
+
+  return {
+    controller,
+    permissions,
+    fieldVisibility: new FieldVisibilityService({
+      uow: database.uow,
+      repository: new FieldVisibilityRepository(),
+      cache,
+    }),
+  };
+}
+
 export async function buildContainer(config: Config): Promise<Container> {
   const database: UnitOfWorkHandle = createUnitOfWork({
     url: config.database.url,
@@ -191,6 +239,9 @@ export async function buildContainer(config: Config): Promise<Container> {
 
   const invitationsController = buildInvitations(config, database, hasher, mailHandle.mail, clock);
 
+  const cache = new LruCacheAdapter();
+  const access = buildAccess(database, cache, clock);
+
   return {
     config,
     clock,
@@ -199,7 +250,10 @@ export async function buildContainer(config: Config): Promise<Container> {
     tokenVerifier,
     authController,
     invitationsController,
-    cache: new LruCacheAdapter(),
+    accessController: access.controller,
+    permissionsService: access.permissions,
+    fieldVisibility: access.fieldVisibility,
+    cache,
     storage: buildStorage(config),
     mail: mailHandle.mail,
     uow: database.uow,

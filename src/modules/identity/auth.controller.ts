@@ -42,6 +42,14 @@ export class AuthController {
     return this.#service.login(body.email, body.password, meta);
   }
 
+  async refresh(refreshToken: string, meta: RequestMeta): Promise<LoginResult> {
+    return this.#service.refresh(refreshToken, meta);
+  }
+
+  async logout(refreshToken: string): Promise<void> {
+    await this.#service.logout(refreshToken);
+  }
+
   async beginMfa(companyId: string, userId: string): Promise<{ secret: string; uri: string }> {
     return this.#service.beginMfaEnrolment(unsafeCompanyId(companyId), unsafeUserId(userId));
   }
