@@ -14,6 +14,8 @@ import { randomUUID } from 'node:crypto';
 
 import type { AuthController } from '../modules/identity/auth.controller.js';
 import { registerIdentityRoutes } from '../modules/identity/identity.routes.js';
+import type { InvitationsController } from '../modules/identity/invitations.controller.js';
+import { registerInvitationRoutes } from '../modules/identity/invitations.routes.js';
 import type { Config } from '../platform/config/config.types.js';
 import type { TokenVerifierPort } from '../shared/ports/token-issuer.js';
 import { registerAuthentication, requireAuth } from './authentication.js';
@@ -178,10 +180,19 @@ function registerModules(app: FastifyInstance, config: Config, deps: ApiDependen
       : { onVerificationToken: deps.captureVerificationToken }),
     ...(deps.readLastEmail === undefined ? {} : { devEmailReader: deps.readLastEmail }),
   });
+
+  registerInvitationRoutes(app, {
+    controller: deps.invitationsController,
+    currentUser: (request) => {
+      const auth = requireAuth(request as FastifyRequest);
+      return { companyId: auth.companyId, userId: auth.userId };
+    },
+  });
 }
 
 export interface ApiDependencies {
   readonly authController: AuthController;
+  readonly invitationsController: InvitationsController;
   /**
    * The application logger.
    *

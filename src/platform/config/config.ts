@@ -7,7 +7,8 @@ import type {
   Config,
   DatabaseConfig,
   LogLevel,
-  MailDriver,
+  AuthSecretsConfig,
+  MailConfig,
   NodeEnv,
   StorageConfig,
   TelemetryConfig,
@@ -212,6 +213,40 @@ function resolveStorage(data: RawEnv, problems: string[]): StorageConfig | null 
   return { driver: 'filesystem', root };
 }
 
+/**
+ * SMTP settings, all five required together when the driver is `smtp`.
+ *
+ * Every missing variable is reported by name, and all of them in one pass —
+ * fixing one at a time across five restarts is the failure mode this avoids.
+ * The values themselves never appear in a problem string: SMTP_PASS is a
+ * secret, and `problems` is printed to a log (SEC-060).
+ */
+function resolveMail(data: RawEnv, problems: string[]): MailConfig | null {
+  if (readString(data, 'MAIL_DRIVER') === 'log') return { driver: 'log' };
+
+  const required = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM'] as const;
+  const missing = required.filter((key) => {
+    const value = data[key];
+    return value === undefined || value === null || value === '';
+  });
+
+  if (missing.length > 0) {
+    for (const key of missing) {
+      problems.push(`${key}: required when MAIL_DRIVER=smtp`);
+    }
+    return null;
+  }
+
+  return {
+    driver: 'smtp',
+    host: readString(data, 'SMTP_HOST'),
+    port: readNumber(data, 'SMTP_PORT'),
+    user: readString(data, 'SMTP_USER'),
+    password: readString(data, 'SMTP_PASS'),
+    from: readString(data, 'MAIL_FROM'),
+  };
+}
+
 function resolveTelemetry(data: RawEnv, problems: string[]): TelemetryConfig | null {
   if (!readBoolean(data, 'OTEL_ENABLED')) return { enabled: false };
 
@@ -245,6 +280,16 @@ function checkSwagger(nodeEnv: NodeEnv, data: RawEnv, problems: string[]): void 
 /**
  * @throws {ConfigValidationError} listing every problem found, not just the first.
  */
+/** The four secrets, gathered so `loadConfig` reads as a list of resolvers. */
+function resolveAuthSecrets(data: RawEnv, problems: string[]): AuthSecretsConfig {
+  return {
+    jwtPrivateKeyPem: decodePem(data, 'JWT_PRIVATE_KEY', problems),
+    jwtPublicKeyPem: decodePem(data, 'JWT_PUBLIC_KEY', problems),
+    cookieSecret: readString(data, 'COOKIE_SECRET'),
+    secretEncryptionKey: readString(data, 'SECRET_ENCRYPTION_KEY'),
+  };
+}
+
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   const data = pickKnownKeys(source);
 
@@ -257,14 +302,20 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
 
   const database = resolveDatabase(nodeEnv, data, problems);
   const storage = resolveStorage(data, problems);
+  const mail = resolveMail(data, problems);
   const telemetry = resolveTelemetry(data, problems);
   const workerDomains = readWorkerDomains(data, problems);
-  const jwtPrivateKeyPem = decodePem(data, 'JWT_PRIVATE_KEY', problems);
-  const jwtPublicKeyPem = decodePem(data, 'JWT_PUBLIC_KEY', problems);
+  const auth = resolveAuthSecrets(data, problems);
   checkOpsListener(data, problems);
   checkSwagger(nodeEnv, data, problems);
 
-  if (database === null || storage === null || telemetry === null || problems.length > 0) {
+  if (
+    database === null ||
+    storage === null ||
+    mail === null ||
+    telemetry === null ||
+    problems.length > 0
+  ) {
     throw new ConfigValidationError(problems);
   }
 
@@ -275,14 +326,9 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     ops: { host: readString(data, 'OPS_HOST'), port: readNumber(data, 'OPS_PORT') },
     database,
     storage,
-    mail: { driver: readString(data, 'MAIL_DRIVER') as MailDriver },
+    mail,
     corsAllowedOrigins: readOrigins(data),
-    auth: {
-      jwtPrivateKeyPem,
-      jwtPublicKeyPem,
-      cookieSecret: readString(data, 'COOKIE_SECRET'),
-      secretEncryptionKey: readString(data, 'SECRET_ENCRYPTION_KEY'),
-    },
+    auth,
     workerDomains,
     swagger: { enabled: readBoolean(data, 'SWAGGER_ENABLED') },
     telemetry,

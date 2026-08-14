@@ -45,6 +45,15 @@ export const RawEnvSchema = Type.Object(
     STORAGE_FS_ROOT: Type.Optional(Type.String({ minLength: 1 })),
 
     MAIL_DRIVER: StringEnum(['log', 'smtp']),
+    /* Optional at the schema level, required by the cross-field rule when
+       MAIL_DRIVER=smtp. Declaring them required here would make the `log`
+       driver — the default for development and every test — impossible to run
+       without inventing SMTP credentials. */
+    SMTP_HOST: Type.Optional(Type.String({ minLength: 1 })),
+    SMTP_PORT: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_535 })),
+    SMTP_USER: Type.Optional(Type.String({ minLength: 1 })),
+    SMTP_PASS: Type.Optional(Type.String({ minLength: 1 })),
+    MAIL_FROM: Type.Optional(Type.String({ minLength: 3 })),
 
     /* Comma-separated origins permitted on credentialed routes. Optional, and
        absent means NONE — the closed default. CORS is never `*` on a

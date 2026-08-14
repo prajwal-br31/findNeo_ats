@@ -14,6 +14,7 @@ import type { Config } from '../platform/config/config.types.js';
 import { DrizzleIdempotencyStore } from '../platform/db/idempotency-store.js';
 import { createUnitOfWork, type UnitOfWorkHandle } from '../platform/db/unit-of-work.js';
 import { LogMailAdapter } from '../platform/mail/log-mail-adapter.js';
+import { SmtpMailAdapter } from '../platform/mail/smtp-mail-adapter.js';
 import { FilesystemStorage } from '../platform/storage/filesystem-storage.js';
 import type { CachePort } from '../shared/ports/cache.js';
 import type { ClockPort } from '../shared/ports/clock.js';
@@ -26,6 +27,9 @@ import type { UnitOfWorkPort } from '../shared/ports/unit-of-work.js';
 import { AuthService } from '../modules/identity/application/auth.service.js';
 import { AuthController } from '../modules/identity/auth.controller.js';
 import { IdentityRepository } from '../modules/identity/infrastructure/identity.repository.js';
+import { InvitationsService } from '../modules/identity/application/invitations.service.js';
+import { InvitationsController } from '../modules/identity/invitations.controller.js';
+import { InvitationsRepository } from '../modules/identity/infrastructure/invitations.repository.js';
 
 /**
  * The composition root (ER-008).
@@ -48,6 +52,7 @@ export interface Container {
   readonly tokens: TokenIssuerPort;
   readonly tokenVerifier: TokenVerifierPort;
   readonly authController: AuthController;
+  readonly invitationsController: InvitationsController;
   close(): Promise<void>;
 }
 
@@ -59,11 +64,28 @@ function buildStorage(config: Config): StoragePort {
   );
 }
 
-function buildMail(config: Config): MailPort {
-  if (config.mail.driver === 'log') return new LogMailAdapter();
-  throw new Error(
-    'MAIL_DRIVER=smtp is not implemented until Phase 1, when there is a message to send.',
-  );
+/**
+ * Async because the SMTP driver authenticates here, at boot.
+ *
+ * `verify()` opens a connection and logs in, so a wrong password or an
+ * unreachable host fails the process start. Deferred to the first send, the
+ * same mistake surfaces inside a worker on a job that retries and
+ * dead-letters, hours after the deploy that caused it.
+ */
+async function buildMail(config: Config): Promise<{ mail: MailPort; close: () => Promise<void> }> {
+  if (config.mail.driver === 'log') {
+    return { mail: new LogMailAdapter(), close: () => Promise.resolve() };
+  }
+
+  const smtp = new SmtpMailAdapter({
+    host: config.mail.host,
+    port: config.mail.port,
+    user: config.mail.user,
+    password: config.mail.password,
+    from: config.mail.from,
+  });
+  await smtp.verify();
+  return { mail: smtp, close: () => smtp.close() };
 }
 
 /**
@@ -126,6 +148,29 @@ function buildIdentity(deps: IdentityDeps): AuthController {
   );
 }
 
+/** The invitations module's object graph. */
+function buildInvitations(
+  config: Config,
+  database: UnitOfWorkHandle,
+  hasher: Argon2PasswordHasher,
+  mail: MailPort,
+  clock: SystemClock,
+): InvitationsController {
+  return new InvitationsController(
+    new InvitationsService({
+      uow: database.uow,
+      invitations: new InvitationsRepository(),
+      identity: new IdentityRepository(),
+      hasher,
+      mail,
+      clock,
+      /* Where the accept link points. The API's own origin in development;
+         the web app's in a real deployment. */
+      appBaseUrl: `http://${config.api.host}:${String(config.api.port)}`,
+    }),
+  );
+}
+
 export async function buildContainer(config: Config): Promise<Container> {
   const database: UnitOfWorkHandle = createUnitOfWork({
     url: config.database.url,
@@ -140,8 +185,11 @@ export async function buildContainer(config: Config): Promise<Container> {
   const secretBox = new SecretBox(config.auth.secretEncryptionKey);
 
   const { boss, queue } = await buildQueue(config);
+  const mailHandle = await buildMail(config);
 
   const authController = buildIdentity({ database, hasher, tokens, queue, clock, secretBox });
+
+  const invitationsController = buildInvitations(config, database, hasher, mailHandle.mail, clock);
 
   return {
     config,
@@ -150,13 +198,15 @@ export async function buildContainer(config: Config): Promise<Container> {
     tokens,
     tokenVerifier,
     authController,
+    invitationsController,
     cache: new LruCacheAdapter(),
     storage: buildStorage(config),
-    mail: buildMail(config),
+    mail: mailHandle.mail,
     uow: database.uow,
     idempotency: new DrizzleIdempotencyStore(),
     close: async (): Promise<void> => {
       await boss.stop({ graceful: false });
+      await mailHandle.close();
       await database.close();
     },
   };

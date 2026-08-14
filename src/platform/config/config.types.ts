@@ -36,6 +36,24 @@ export interface DatabaseConfig {
 export type StorageConfig =
   { readonly driver: 'filesystem'; readonly root: string } | { readonly driver: 's3' };
 
+/**
+ * The smtp branch carries its settings, so a `driver: 'smtp'` config that is
+ * missing a host is not representable. The adapter cannot be constructed
+ * without them, which is what makes "fails to start" a type-level guarantee
+ * rather than a runtime check somebody remembers to write.
+ */
+export type MailConfig =
+  | { readonly driver: 'log' }
+  | {
+      readonly driver: 'smtp';
+      readonly host: string;
+      readonly port: number;
+      readonly user: string;
+      /** Secret. Never log, never serialize, never include in an error. */
+      readonly password: string;
+      readonly from: string;
+    };
+
 /** Disabled by default — telemetry never egresses by default (SEC-070). */
 export type TelemetryConfig =
   { readonly enabled: false } | { readonly enabled: true; readonly otlpEndpoint: string };
@@ -58,7 +76,7 @@ export interface Config {
   readonly ops: ListenerConfig;
   readonly database: DatabaseConfig;
   readonly storage: StorageConfig;
-  readonly mail: { readonly driver: MailDriver };
+  readonly mail: MailConfig;
   /** Empty means no cross-origin request is permitted. Never `*`. */
   readonly corsAllowedOrigins: readonly string[];
   readonly auth: AuthSecretsConfig;

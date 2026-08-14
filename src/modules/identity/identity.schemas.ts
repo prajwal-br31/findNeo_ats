@@ -112,13 +112,15 @@ export type VerifyEmailBody = Static<typeof VerifyEmailBody>;
  * proving the user can generate a code locks them out of their own account
  * the moment MFA becomes mandatory.
  */
-export const EnableMfaBody = Type.Union([
-  Type.Object({}, { additionalProperties: false }),
-  Type.Object(
-    { code: Type.String({ minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }) },
-    { additionalProperties: false },
-  ),
-]);
+/* One object with an optional `code`, NOT a union of two shapes. Fastify's
+   ajv runs with `removeAdditional`, so under a union the first branch —
+   `{}` with additionalProperties: false — matched and stripped `code` out of
+   the body before the handler saw it, and every completion silently behaved
+   like a fresh begin. */
+export const EnableMfaBody = Type.Object(
+  { code: Type.Optional(Type.String({ minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' })) },
+  { additionalProperties: false },
+);
 export type EnableMfaBody = Static<typeof EnableMfaBody>;
 
 export const BeginMfaResponse = Type.Object(

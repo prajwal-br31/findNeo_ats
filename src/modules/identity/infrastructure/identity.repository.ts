@@ -135,6 +135,32 @@ export class IdentityRepository {
    * the caller can fail loudly when the catalog was never seeded, rather than
    * creating an owner with no permissions at all.
    */
+  /** Assigns a role already resolved to an id — the invitation-accept path. */
+  async assignRoleById(
+    tx: TxScope,
+    companyId: CompanyId,
+    userId: UserId,
+    roleId: string,
+  ): Promise<void> {
+    await unwrapTxScope(tx).execute(sql`
+      insert into user_roles (company_id, user_id, role_id, granted_by)
+      values (${companyId}, ${userId}, ${roleId}, ${userId})
+    `);
+  }
+
+  /** Department membership. The composite FK rejects a cross-tenant pair. */
+  async addToDepartment(
+    tx: TxScope,
+    companyId: CompanyId,
+    userId: UserId,
+    departmentId: string,
+  ): Promise<void> {
+    await unwrapTxScope(tx).execute(sql`
+      insert into user_departments (user_id, department_id, company_id, is_primary)
+      values (${userId}, ${departmentId}, ${companyId}, false)
+    `);
+  }
+
   async assignPlatformRole(
     tx: TxScope,
     companyId: CompanyId,

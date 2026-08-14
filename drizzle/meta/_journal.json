@@ -99,6 +99,20 @@
       "when": 1786612797996,
       "tag": "0016_global_email_uniqueness",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786612857996,
+      "tag": "0017_mfa_cannot_be_disabled_while_super_admin",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786612917996,
+      "tag": "0018_invitation_token_lookup",
+      "breakpoints": true
     }
   ]
 }
