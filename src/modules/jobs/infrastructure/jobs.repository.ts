@@ -26,6 +26,18 @@ export interface JobRow extends Record<string, unknown> {
   readonly createdAt: Date | string;
 }
 
+/**
+ * A list row: `JobRow` plus the three counts and the department's name.
+ *
+ * Additive — every `JobRow` field keeps its name and meaning, so a caller
+ * written against the single-job shape reads a list row unchanged.
+ */
+export interface JobListRow extends JobRow {
+  readonly departmentName: string | null;
+  readonly teamCount: number;
+  readonly applicationCount: number;
+}
+
 export interface InsertJobInput {
   readonly companyId: CompanyId;
   readonly departmentId: string;
@@ -64,10 +76,17 @@ export class JobsRepository {
    * would return short pages and a wrong count, and would mean the rows were
    * read before being discarded.
    */
-  async list(tx: TxScope, companyId: CompanyId, scope: JobScope): Promise<JobRow[]> {
-    const result = await unwrapTxScope(tx).execute<JobRow>(sql`
-      select ${SELECT_COLUMNS}
+  async list(tx: TxScope, companyId: CompanyId, scope: JobScope): Promise<JobListRow[]> {
+    const result = await unwrapTxScope(tx).execute<JobListRow>(sql`
+      select ${SELECT_COLUMNS},
+             d.name as "departmentName",
+             (select count(*)::int from job_hiring_team t where t.job_id = j.id) as "teamCount",
+             /* There is no applications table until Phase 3 (T-070). Reported
+                as zero rather than omitted so the column exists in the contract
+                from the start and gains a real source without a shape change. */
+             0::int as "applicationCount"
         from jobs j
+        left join departments d on d.id = j.department_id
        where j.company_id = ${companyId}
          and ${jobScopePredicate(scope)}
        order by j.created_at desc

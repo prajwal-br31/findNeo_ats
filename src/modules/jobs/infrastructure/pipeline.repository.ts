@@ -18,6 +18,8 @@ export interface TeamMemberRow extends Record<string, unknown> {
   readonly id: string;
   readonly userId: string;
   readonly teamRole: string;
+  readonly fullName: string;
+  readonly email: string;
 }
 
 export interface SkillRow extends Record<string, unknown> {
@@ -164,8 +166,12 @@ export class PipelineRepository {
 
   async listTeam(tx: TxScope, jobId: string): Promise<TeamMemberRow[]> {
     const result = await unwrapTxScope(tx).execute<TeamMemberRow>(sql`
-      select id, user_id as "userId", team_role as "teamRole"
-        from job_hiring_team where job_id = ${jobId} order by added_at
+      select t.id, t.user_id as "userId", t.team_role as "teamRole",
+             u.full_name as "fullName", u.email
+        from job_hiring_team t
+        join users u on u.id = t.user_id
+       where t.job_id = ${jobId}
+       order by t.added_at
     `);
     return result.rows;
   }

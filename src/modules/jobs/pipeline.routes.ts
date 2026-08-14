@@ -20,7 +20,7 @@ const StageParams = Type.Object({
   stageId: Type.String({ format: 'uuid' }),
 });
 
-function registerStages(app: FastifyInstance, options: JobsRouteOptions): void {
+function registerStageList(app: FastifyInstance, options: JobsRouteOptions): void {
   const { controller, actor } = options;
 
   app.get(
@@ -42,6 +42,10 @@ function registerStages(app: FastifyInstance, options: JobsRouteOptions): void {
       await reply.send({ data });
     },
   );
+}
+
+function registerStageCreate(app: FastifyInstance, options: JobsRouteOptions): void {
+  const { controller, actor } = options;
 
   app.post(
     '/v1/jobs/:id/stages',
@@ -293,7 +297,8 @@ function registerPipelineTemplates(app: FastifyInstance, options: JobsRouteOptio
 }
 
 export function registerPipelineRoutes(app: FastifyInstance, options: JobsRouteOptions): void {
-  registerStages(app, options);
+  registerStageList(app, options);
+  registerStageCreate(app, options);
   registerStageEdits(app, options);
   registerReorder(app, options);
   registerTeam(app, options);

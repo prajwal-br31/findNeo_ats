@@ -2,7 +2,7 @@ import { BusinessRuleError, conflict, notFound } from '../../../shared/errors/ap
 import type { TxScope, UnitOfWorkPort } from '../../../shared/ports/unit-of-work.js';
 import type { CompanyId, UserId } from '../../../shared/types/ids.js';
 import type { JobScope } from '../infrastructure/job-scope.js';
-import type { JobRow, JobsRepository } from '../infrastructure/jobs.repository.js';
+import type { JobListRow, JobRow, JobsRepository } from '../infrastructure/jobs.repository.js';
 import type { PipelineRepository } from '../infrastructure/pipeline.repository.js';
 import type { FormsService } from './forms.service.js';
 
@@ -67,7 +67,7 @@ export class JobsService {
     this.#deps = deps;
   }
 
-  async list(companyId: CompanyId, scope: JobScope): Promise<JobRow[]> {
+  async list(companyId: CompanyId, scope: JobScope): Promise<JobListRow[]> {
     const { uow, repository } = this.#deps;
     return uow.withTenant(companyId, (tx: TxScope) => repository.list(tx, companyId, scope));
   }

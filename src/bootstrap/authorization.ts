@@ -42,6 +42,12 @@ export function registerAuthorization(
   fieldVisibility: FieldVisibilityService,
 ): void {
   app.addHook('preHandler', async (request) => {
+    /* No matched route: this is the not-found handler, which instance-level
+       hooks also run for. It has no metadata and never will, and refusing it
+       here turns every 404 into a 500 — which is how an unknown path came to
+       look like a server fault. */
+    if (request.routeOptions.url === undefined) return;
+
     const metadata = (request.routeOptions.config as RouteConfig | undefined)?.findneo;
     if (metadata?.public === true) return;
 
@@ -60,7 +66,7 @@ export function registerAuthorization(
       /* Neither public nor permissioned. Registration prevents this; if it
          ever happens anyway, refuse. */
       throw new Error(
-        `route ${request.method} ${request.routeOptions.url ?? request.url} reached the ` +
+        `route ${request.method} ${request.routeOptions.url} reached the ` +
           'authorization hook with no permission and no public marker',
       );
     }

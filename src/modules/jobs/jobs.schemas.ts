@@ -128,6 +128,11 @@ export const JobResponse = Type.Object(
     createdAt: Type.String(),
     /** Present only when something was withheld (07 §8). */
     _masked: Type.Optional(Type.Array(Type.String())),
+    /* Additive list-only fields. Optional so `JobResponse` still describes the
+       single-job payload, which does not carry them. */
+    departmentName: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    teamCount: Type.Optional(Type.Integer()),
+    applicationCount: Type.Optional(Type.Integer()),
   },
   { additionalProperties: false },
 );
@@ -202,6 +207,10 @@ export const TeamListResponse = Type.Object(
           id: Type.String({ format: 'uuid' }),
           userId: Type.String({ format: 'uuid' }),
           teamRole: Type.String(),
+          /* Joined from `users` so the client can render a name without a
+             second round trip per member. */
+          fullName: Type.String(),
+          email: Type.String(),
         },
         { additionalProperties: false },
       ),

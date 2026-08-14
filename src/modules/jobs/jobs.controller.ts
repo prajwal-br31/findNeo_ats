@@ -6,7 +6,7 @@ import { unsafeCompanyId, unsafeUserId } from '../../shared/types/ids.js';
 import type { FormsService } from './application/forms.service.js';
 import type { JobsService } from './application/jobs.service.js';
 import type { PipelineService } from './application/pipeline.service.js';
-import { toJobView, toJobViews, type JobView } from './jobs.mapper.js';
+import { toJobListViews, toJobView, type JobListView, type JobView } from './jobs.mapper.js';
 import type {
   AddTeamMemberBody,
   CreateJobBody,
@@ -53,10 +53,10 @@ export class JobsController {
 
   /* ------------------------------------------------------------------ jobs -- */
 
-  async listJobs(actor: RequestActor): Promise<JobView[]> {
+  async listJobs(actor: RequestActor): Promise<JobListView[]> {
     const rows = await this.#jobs.list(unsafeCompanyId(actor.companyId), scopeOf(actor));
     /* Masked in the list too, not only on the single resource (BR-091). */
-    return toJobViews(rows, actor.visibility, actor.permissions);
+    return toJobListViews(rows, actor.visibility, actor.permissions);
   }
 
   async getJob(actor: RequestActor, id: string): Promise<JobView> {

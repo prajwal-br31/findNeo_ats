@@ -29,6 +29,13 @@ export interface JobRecord {
   readonly createdAt: Date | string;
 }
 
+/** The list row's extra columns. Absent on the single-job path. */
+export interface JobListRecord extends JobRecord {
+  readonly departmentName: string | null;
+  readonly teamCount: number;
+  readonly applicationCount: number;
+}
+
 /**
  * Job serialization with salary masking (T-050, BR-091, 08-lld-jobs §6).
  *
@@ -62,6 +69,12 @@ export interface JobView extends Record<string, unknown> {
   formTemplateVersionId: string;
   customFields: unknown;
   createdAt: string;
+}
+
+export interface JobListView extends JobView {
+  departmentName: string | null;
+  teamCount: number;
+  applicationCount: number;
 }
 
 function toNumber(value: string | null): number | null {
@@ -142,4 +155,22 @@ export function toJobViews(
   permissions: ResolvedPermissions,
 ): JobView[] {
   return rows.map((row) => toJobView(row, visibility, permissions));
+}
+
+/**
+ * The list mapper. Masking runs first, then the three additive fields are
+ * added — in that order, so a future rule on one of them cannot be defeated by
+ * being written after the mask was applied.
+ */
+export function toJobListViews(
+  rows: readonly JobListRecord[],
+  visibility: FieldVisibility,
+  permissions: ResolvedPermissions,
+): JobListView[] {
+  return rows.map((row) => ({
+    ...toJobView(row, visibility, permissions),
+    departmentName: row.departmentName,
+    teamCount: row.teamCount,
+    applicationCount: row.applicationCount,
+  }));
 }

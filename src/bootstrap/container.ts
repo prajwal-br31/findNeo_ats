@@ -40,6 +40,8 @@ import { DepartmentsRepository } from '../modules/identity/infrastructure/depart
 import { FieldVisibilityRepository } from '../modules/identity/infrastructure/field-visibility.repository.js';
 import { PlatformRepository } from '../modules/identity/infrastructure/platform.repository.js';
 import { RolesRepository } from '../modules/identity/infrastructure/roles.repository.js';
+import { UsersService } from '../modules/identity/application/users.service.js';
+import { UsersRepository } from '../modules/identity/infrastructure/users.repository.js';
 import { FormsService } from '../modules/jobs/application/forms.service.js';
 import { JobsService } from '../modules/jobs/application/jobs.service.js';
 import { PipelineService } from '../modules/jobs/application/pipeline.service.js';
@@ -73,6 +75,7 @@ export interface Container {
   readonly accessController: AccessController;
   readonly permissionsService: PermissionsService;
   readonly fieldVisibility: FieldVisibilityService;
+  readonly usersService: UsersService;
   readonly jobsController: JobsController;
   close(): Promise<void>;
 }
@@ -196,6 +199,7 @@ interface AccessGraph {
   readonly controller: AccessController;
   readonly permissions: PermissionsService;
   readonly fieldVisibility: FieldVisibilityService;
+  readonly users: UsersService;
 }
 
 /** Departments, roles, permissions, masking and the platform surface. */
@@ -219,6 +223,11 @@ function buildAccess(
   return {
     controller,
     permissions,
+    users: new UsersService({
+      uow: database.uow,
+      repository: new UsersRepository(),
+      permissions,
+    }),
     fieldVisibility: new FieldVisibilityService({
       uow: database.uow,
       repository: new FieldVisibilityRepository(),
@@ -303,6 +312,7 @@ export async function buildContainer(config: Config): Promise<Container> {
     accessController: access.controller,
     permissionsService: access.permissions,
     fieldVisibility: access.fieldVisibility,
+    usersService: access.users,
     jobsController,
     cache,
     storage: buildStorage(config),

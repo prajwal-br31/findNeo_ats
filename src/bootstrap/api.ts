@@ -20,6 +20,8 @@ import type { PermissionsService } from '../modules/identity/application/permiss
 import type { FieldVisibilityService } from '../modules/identity/application/field-visibility.service.js';
 import type { InvitationsController } from '../modules/identity/invitations.controller.js';
 import { registerInvitationRoutes } from '../modules/identity/invitations.routes.js';
+import type { UsersService } from '../modules/identity/application/users.service.js';
+import { registerUserRoutes } from '../modules/identity/users.routes.js';
 import type { JobsController } from '../modules/jobs/jobs.controller.js';
 import { registerJobRoutes } from '../modules/jobs/jobs.routes.js';
 import type { Config } from '../platform/config/config.types.js';
@@ -195,15 +197,20 @@ function registerJobsModule(app: FastifyInstance, deps: ApiDependencies): void {
   });
 }
 
-function registerModules(app: FastifyInstance, config: Config, deps: ApiDependencies): void {
-  registerAuthentication(app, deps.tokenVerifier);
+/**
+ * `{ companyId, userId }` for the modules that take only those two, resolved
+ * through `requireAuth` so a route reached without an authenticated caller
+ * throws rather than reading `undefined` off the request.
+ */
+function actorOf(request: unknown): { companyId: string; userId: string } {
+  const auth = requireAuth(request as FastifyRequest);
+  return { companyId: auth.companyId, userId: auth.userId };
+}
 
+function registerIdentityModule(app: FastifyInstance, config: Config, deps: ApiDependencies): void {
   registerIdentityRoutes(app, {
     controller: deps.authController,
-    currentUser: (request) => {
-      const auth = requireAuth(request as FastifyRequest);
-      return { companyId: auth.companyId, userId: auth.userId };
-    },
+    currentUser: actorOf,
     setRefreshCookie: (reply, token) => {
       setRefreshCookie(reply as FastifyReply, token, config);
     },
@@ -220,20 +227,27 @@ function registerModules(app: FastifyInstance, config: Config, deps: ApiDependen
 
   registerInvitationRoutes(app, {
     controller: deps.invitationsController,
-    currentUser: (request) => {
-      const auth = requireAuth(request as FastifyRequest);
-      return { companyId: auth.companyId, userId: auth.userId };
-    },
+    currentUser: actorOf,
   });
 
   registerAccessRoutes(app, {
     controller: deps.accessController,
-    currentUser: (request) => {
-      const auth = requireAuth(request as FastifyRequest);
-      return { companyId: auth.companyId, userId: auth.userId };
-    },
+    currentUser: actorOf,
     traceId: (request) => (request as FastifyRequest).id,
   });
+
+  registerUserRoutes(app, {
+    service: deps.usersService,
+    currentUser: (request) => {
+      const auth = requireAuth(request as FastifyRequest);
+      return { companyId: auth.companyId, userId: auth.userId, capability: auth.capability };
+    },
+  });
+}
+
+function registerModules(app: FastifyInstance, config: Config, deps: ApiDependencies): void {
+  registerAuthentication(app, deps.tokenVerifier);
+  registerIdentityModule(app, config, deps);
 
   registerJobsModule(app, deps);
 
@@ -249,6 +263,7 @@ export interface ApiDependencies {
   readonly permissionsService: PermissionsService;
   readonly jobsController: JobsController;
   readonly fieldVisibility: FieldVisibilityService;
+  readonly usersService: UsersService;
   /**
    * The application logger.
    *

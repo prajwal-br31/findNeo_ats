@@ -59,7 +59,53 @@ function problem(
  * Only an `AppError` contributes a `detail` — its author chose that text for a
  * client to read. Everything else is `ERR_INTERNAL`.
  */
+/**
+ * A schema rejection from Fastify's own validator.
+ *
+ * These never reach an application layer — Fastify throws them in
+ * `preValidation`, before any handler — so nothing has had the chance to wrap
+ * them in a `ValidationError`. Without this branch a missing required field
+ * falls through to `ERR_INTERNAL` and the client is told the server broke when
+ * in fact the client's request was wrong.
+ *
+ * Only the JSON Pointer and the keyword are copied out. Ajv's `message` is
+ * generated from the schema and can name a field the API never documented, so
+ * the detail stays a fixed sentence and the pointer does the explaining.
+ */
+interface FastifySchemaError {
+  readonly instancePath?: unknown;
+  readonly keyword?: unknown;
+  readonly params?: { readonly missingProperty?: unknown };
+}
+
+function schemaErrors(error: unknown): readonly FastifySchemaError[] | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const validation = (error as { validation?: unknown }).validation;
+  return Array.isArray(validation) ? (validation as FastifySchemaError[]) : undefined;
+}
+
+function toFieldError(entry: FastifySchemaError): FieldError {
+  const pointer = typeof entry.instancePath === 'string' ? entry.instancePath : '';
+  const missing =
+    typeof entry.params?.missingProperty === 'string' ? entry.params.missingProperty : undefined;
+  const keyword = typeof entry.keyword === 'string' ? entry.keyword : 'invalid';
+
+  return {
+    path: missing === undefined ? pointer : `${pointer}/${missing}`,
+    code: keyword,
+    message: missing === undefined ? `Fails the ${keyword} constraint.` : 'Required.',
+  };
+}
+
 export function toProblemDetails(error: unknown, context: ProblemContext): ProblemDetails {
+  const schema = schemaErrors(error);
+  if (schema !== undefined) {
+    return problem('ERR_VALIDATION_FAILED', context, {
+      detail: 'One or more fields are invalid.',
+      fields: schema.map(toFieldError),
+    });
+  }
+
   if (error instanceof ValidationError) {
     const { detail } = error;
     return problem('ERR_VALIDATION_FAILED', context, {
