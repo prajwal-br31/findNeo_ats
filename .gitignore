@@ -20,6 +20,17 @@ var/
 coverage/
 *.log
 
+# Local curl request bodies. Named individually rather than as `*.json` —
+# package.json, tsconfig.json and drizzle/meta are all tracked, and a blanket
+# rule would silently stop `git add .` from seeing changes to any of them.
+body.json
+empty.json
+login.json
+signup.json
+verify.json
+mfa.json
+job.json
+
 # Key material. Nothing should ever produce these here — JWT keys travel
 # base64-encoded inside .env (ER-046) — which is exactly why an accidental one
 # must not be reachable by `git add .`.
