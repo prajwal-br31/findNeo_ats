@@ -93,6 +93,21 @@ export default tseslint.config(
   },
 
   {
+    /* Test files: no length limits.
+       `max-lines` and `max-lines-per-function` exist to keep production code
+       readable, and splitting a suite to satisfy them fragments a coherent set
+       of cases across files that then need duplicated fixtures — which is
+       worse to read, not better. A `describe` block is a list, and a long list
+       is fine. Every other rule, including the boundaries matrix, still
+       applies here. */
+    files: ['src/**/__tests__/**/*.ts'],
+    rules: {
+      'max-lines': 'off',
+      'max-lines-per-function': 'off',
+    },
+  },
+
+  {
     /* Config files and the resolver: plain JS/CJS, outside every tsconfig. */
     files: ['**/*.js', '**/*.cjs'],
     extends: [tseslint.configs.disableTypeChecked],

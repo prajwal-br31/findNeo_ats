@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import type { PermissionsService } from '../modules/identity/application/permissions.service.js';
 import { requirePermission } from '../shared/authz/authorize.js';
 import type { ResolvedPermissions } from '../shared/authz/permission-cache.js';
+import type { FieldVisibilityService } from '../modules/identity/application/field-visibility.service.js';
+import type { FieldVisibility } from '../shared/authz/masking.js';
 import type { RouteConfig } from '../shared/http/route-metadata.js';
 
 /**
@@ -23,10 +25,22 @@ declare module 'fastify' {
   interface FastifyRequest {
     /** Resolved for every permissioned route. Absent on public ones. */
     permissions?: ResolvedPermissions;
+    /**
+     * The tenant's field-visibility rules, resolved once per request.
+     *
+     * Here rather than per row: a list endpoint serialising 100 jobs would
+     * otherwise resolve the rules 100 times, and masking is applied to every
+     * one of them (BR-091).
+     */
+    fieldVisibility?: FieldVisibility;
   }
 }
 
-export function registerAuthorization(app: FastifyInstance, permissions: PermissionsService): void {
+export function registerAuthorization(
+  app: FastifyInstance,
+  permissions: PermissionsService,
+  fieldVisibility: FieldVisibilityService,
+): void {
   app.addHook('preHandler', async (request) => {
     const metadata = (request.routeOptions.config as RouteConfig | undefined)?.findneo;
     if (metadata?.public === true) return;
@@ -39,6 +53,7 @@ export function registerAuthorization(app: FastifyInstance, permissions: Permiss
 
     const resolved = await permissions.resolve(auth.companyId, auth.userId);
     request.permissions = resolved;
+    request.fieldVisibility = await fieldVisibility.resolve(auth.companyId);
 
     const required = metadata?.permission;
     if (required === undefined) {

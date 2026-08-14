@@ -17,8 +17,11 @@ import { registerIdentityRoutes } from '../modules/identity/identity.routes.js';
 import type { AccessController } from '../modules/identity/access.controller.js';
 import { registerAccessRoutes } from '../modules/identity/access.routes.js';
 import type { PermissionsService } from '../modules/identity/application/permissions.service.js';
+import type { FieldVisibilityService } from '../modules/identity/application/field-visibility.service.js';
 import type { InvitationsController } from '../modules/identity/invitations.controller.js';
 import { registerInvitationRoutes } from '../modules/identity/invitations.routes.js';
+import type { JobsController } from '../modules/jobs/jobs.controller.js';
+import { registerJobRoutes } from '../modules/jobs/jobs.routes.js';
 import type { Config } from '../platform/config/config.types.js';
 import type { TokenVerifierPort } from '../shared/ports/token-issuer.js';
 import { registerAuthentication, requireAuth } from './authentication.js';
@@ -167,6 +170,31 @@ async function registerDocumentation(app: FastifyInstance, config: Config): Prom
   });
 }
 
+/** The jobs module, and the actor resolver its routes read from. */
+function registerJobsModule(app: FastifyInstance, deps: ApiDependencies): void {
+  registerJobRoutes(app, {
+    controller: deps.jobsController,
+    /* Permissions and department ids are already on the request — the
+       authorization hook resolved them once. Field visibility is resolved
+       here rather than per row, so a list of 100 jobs costs one lookup. */
+    actor: (request) => {
+      const typed = request as FastifyRequest;
+      const auth = requireAuth(typed);
+      const permissions = typed.permissions;
+      const visibility = typed.fieldVisibility;
+      if (permissions === undefined || visibility === undefined) {
+        throw new Error('job routes require the authorization hook to have run');
+      }
+      return {
+        companyId: auth.companyId,
+        userId: auth.userId,
+        permissions,
+        visibility,
+      };
+    },
+  });
+}
+
 function registerModules(app: FastifyInstance, config: Config, deps: ApiDependencies): void {
   registerAuthentication(app, deps.tokenVerifier);
 
@@ -207,9 +235,11 @@ function registerModules(app: FastifyInstance, config: Config, deps: ApiDependen
     traceId: (request) => (request as FastifyRequest).id,
   });
 
+  registerJobsModule(app, deps);
+
   /* Registered last so it runs after authentication: the hook order is what
      makes `request.auth` available to the permission check. */
-  registerAuthorization(app, deps.permissionsService);
+  registerAuthorization(app, deps.permissionsService, deps.fieldVisibility);
 }
 
 export interface ApiDependencies {
@@ -217,6 +247,8 @@ export interface ApiDependencies {
   readonly invitationsController: InvitationsController;
   readonly accessController: AccessController;
   readonly permissionsService: PermissionsService;
+  readonly jobsController: JobsController;
+  readonly fieldVisibility: FieldVisibilityService;
   /**
    * The application logger.
    *

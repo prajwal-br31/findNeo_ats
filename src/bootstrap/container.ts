@@ -40,6 +40,13 @@ import { DepartmentsRepository } from '../modules/identity/infrastructure/depart
 import { FieldVisibilityRepository } from '../modules/identity/infrastructure/field-visibility.repository.js';
 import { PlatformRepository } from '../modules/identity/infrastructure/platform.repository.js';
 import { RolesRepository } from '../modules/identity/infrastructure/roles.repository.js';
+import { FormsService } from '../modules/jobs/application/forms.service.js';
+import { JobsService } from '../modules/jobs/application/jobs.service.js';
+import { PipelineService } from '../modules/jobs/application/pipeline.service.js';
+import { FormsRepository } from '../modules/jobs/infrastructure/forms.repository.js';
+import { JobsRepository } from '../modules/jobs/infrastructure/jobs.repository.js';
+import { PipelineRepository } from '../modules/jobs/infrastructure/pipeline.repository.js';
+import { JobsController } from '../modules/jobs/jobs.controller.js';
 
 /**
  * The composition root (ER-008).
@@ -66,6 +73,7 @@ export interface Container {
   readonly accessController: AccessController;
   readonly permissionsService: PermissionsService;
   readonly fieldVisibility: FieldVisibilityService;
+  readonly jobsController: JobsController;
   close(): Promise<void>;
 }
 
@@ -219,6 +227,51 @@ function buildAccess(
   };
 }
 
+/** The jobs module's object graph (Phase 2). */
+function buildJobs(database: UnitOfWorkHandle, cache: LruCacheAdapter): JobsController {
+  const jobsRepository = new JobsRepository();
+  const pipelineRepository = new PipelineRepository();
+
+  const forms = new FormsService({
+    uow: database.uow,
+    repository: new FormsRepository(),
+    cache,
+  });
+
+  return new JobsController(
+    new JobsService({
+      uow: database.uow,
+      repository: jobsRepository,
+      pipeline: pipelineRepository,
+      forms,
+    }),
+    forms,
+    new PipelineService({
+      uow: database.uow,
+      repository: pipelineRepository,
+      jobs: jobsRepository,
+    }),
+  );
+}
+
+/** The stateless adapters every module graph is handed. */
+function buildPrimitives(config: Config): {
+  clock: SystemClock;
+  hasher: Argon2PasswordHasher;
+  tokens: JwtTokenIssuer;
+  tokenVerifier: JwtTokenVerifier;
+  secretBox: SecretBox;
+} {
+  const clock = new SystemClock();
+  return {
+    clock,
+    hasher: new Argon2PasswordHasher(),
+    tokens: new JwtTokenIssuer(config.auth.jwtPrivateKeyPem, clock),
+    tokenVerifier: new JwtTokenVerifier(config.auth.jwtPublicKeyPem),
+    secretBox: new SecretBox(config.auth.secretEncryptionKey),
+  };
+}
+
 export async function buildContainer(config: Config): Promise<Container> {
   const database: UnitOfWorkHandle = createUnitOfWork({
     url: config.database.url,
@@ -226,11 +279,7 @@ export async function buildContainer(config: Config): Promise<Container> {
     applicationName: `findneo-api-${config.nodeEnv}`,
   });
 
-  const clock = new SystemClock();
-  const hasher = new Argon2PasswordHasher();
-  const tokens = new JwtTokenIssuer(config.auth.jwtPrivateKeyPem, clock);
-  const tokenVerifier = new JwtTokenVerifier(config.auth.jwtPublicKeyPem);
-  const secretBox = new SecretBox(config.auth.secretEncryptionKey);
+  const { clock, hasher, tokens, tokenVerifier, secretBox } = buildPrimitives(config);
 
   const { boss, queue } = await buildQueue(config);
   const mailHandle = await buildMail(config);
@@ -241,6 +290,7 @@ export async function buildContainer(config: Config): Promise<Container> {
 
   const cache = new LruCacheAdapter();
   const access = buildAccess(database, cache, clock);
+  const jobsController = buildJobs(database, cache);
 
   return {
     config,
@@ -253,6 +303,7 @@ export async function buildContainer(config: Config): Promise<Container> {
     accessController: access.controller,
     permissionsService: access.permissions,
     fieldVisibility: access.fieldVisibility,
+    jobsController,
     cache,
     storage: buildStorage(config),
     mail: mailHandle.mail,

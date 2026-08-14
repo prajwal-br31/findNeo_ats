@@ -42,6 +42,8 @@ const api = await buildApiServer(config, {
   invitationsController: container.invitationsController,
   accessController: container.accessController,
   permissionsService: container.permissionsService,
+  jobsController: container.jobsController,
+  fieldVisibility: container.fieldVisibility,
   tokenVerifier: container.tokenVerifier,
   logger,
   ...(isDevelopment

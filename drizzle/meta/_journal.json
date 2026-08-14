@@ -134,6 +134,41 @@
       "when": 1786613097996,
       "tag": "0021_impersonation_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786613157996,
+      "tag": "0010_form_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786613217996,
+      "tag": "0011_skills_pipeline_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786613277996,
+      "tag": "0012_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1786613337996,
+      "tag": "0022_rls_phase2",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786613397996,
+      "tag": "0023_seed_phase2_defaults",
+      "breakpoints": true
     }
   ]
 }
