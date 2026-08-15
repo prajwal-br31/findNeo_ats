@@ -108,9 +108,7 @@ export class AuthService {
          owner, and this is the update that fills it (06 §3). */
       await repository.setOwner(tx, companyId, userId);
 
-      /* No role grant here (D-050). `trg_owner_requires_mfa` blocks granting
-         super_admin to a user with mfa_enabled = false, and the founding owner
-         has not enrolled yet. The grant moves to the end of MFA enrolment. */
+      await this.#grantFoundingRole(tx, companyId, userId);
 
       await repository.storeVerificationToken(
         tx,
@@ -132,6 +130,37 @@ export class AuthService {
 
       return { companyId, userId, verificationToken };
     });
+  }
+
+  /**
+   * The role a company's first user starts with.
+   *
+   * **Not the owner role** (D-050): `trg_owner_requires_mfa` blocks
+   * super_admin for a user with `mfa_enabled = false`, and the founding user
+   * has not enrolled yet. That grant stays at the end of MFA enrolment.
+   *
+   * `org_admin_hr` is company-scoped administration without the owner's
+   * privileges. Without it the first user holds nothing at all and cannot
+   * reach a single screen — including the one that would let them enrol. The
+   * trigger guards super_admin specifically, so this is not a way around it:
+   * `company.update` is the one permission it withholds, and ownership stays
+   * behind MFA.
+   *
+   * Throws rather than creating a company nobody can administer: a zero row
+   * count means the role catalog was never seeded.
+   */
+  async #grantFoundingRole(tx: TxScope, companyId: CompanyId, userId: UserId): Promise<void> {
+    const granted = await this.#deps.repository.assignPlatformRole(
+      tx,
+      companyId,
+      userId,
+      'org_admin_hr',
+    );
+    if (granted === 0) {
+      throw new Error(
+        'role org_admin_hr is not in the catalog — migration 015 has not run against this database',
+      );
+    }
   }
 
   /**

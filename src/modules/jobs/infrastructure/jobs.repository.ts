@@ -12,6 +12,10 @@ export interface JobRow extends Record<string, unknown> {
   readonly id: string;
   readonly title: string;
   readonly departmentId: string;
+  readonly description: string | null;
+  readonly countryCode: string | null;
+  readonly city: string | null;
+  readonly headcount: number;
   readonly status: string;
   readonly confidential: boolean;
   readonly employmentType: string | null;
@@ -57,7 +61,9 @@ export interface InsertJobInput {
 }
 
 const SELECT_COLUMNS = sql`
-  j.id, j.title, j.department_id as "departmentId", j.status, j.confidential,
+  j.id, j.title, j.department_id as "departmentId", j.description,
+  j.country_code as "countryCode", j.city, j.headcount,
+  j.status, j.confidential,
   j.employment_type as "employmentType", j.work_mode as "workMode",
   j.salary_min as "salaryMin", j.salary_max as "salaryMax",
   j.salary_currency as "salaryCurrency",

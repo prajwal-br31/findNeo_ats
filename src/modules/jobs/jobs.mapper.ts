@@ -15,6 +15,10 @@ export interface JobRecord {
   readonly id: string;
   readonly title: string;
   readonly departmentId: string;
+  readonly description: string | null;
+  readonly countryCode: string | null;
+  readonly city: string | null;
+  readonly headcount: number;
   readonly status: string;
   readonly confidential: boolean;
   readonly employmentType: string | null;
@@ -57,6 +61,10 @@ export interface JobView extends Record<string, unknown> {
   id: string;
   title: string;
   departmentId: string;
+  description: string | null;
+  countryCode: string | null;
+  city: string | null;
+  headcount: number;
   status: string;
   confidential: boolean;
   employmentType: string | null;
@@ -91,6 +99,10 @@ function toView(row: JobRecord): JobView {
     id: row.id,
     title: row.title,
     departmentId: row.departmentId,
+    description: row.description,
+    countryCode: row.countryCode,
+    city: row.city,
+    headcount: row.headcount,
     status: row.status,
     confidential: row.confidential,
     employmentType: row.employmentType,
