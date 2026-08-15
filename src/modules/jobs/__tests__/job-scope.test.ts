@@ -21,14 +21,46 @@ function scope(overrides: Partial<JobScope> = {}): JobScope {
   };
 }
 
-/** Drizzle's SQL object exposes its chunks; joining them gives the shape. */
-function toText(fragment: ReturnType<typeof jobScopePredicate>): string {
-  const chunks = (fragment as unknown as { queryChunks: unknown[] }).queryChunks;
+/**
+ * Drizzle's SQL object exposes its chunks; joining them gives the shape.
+ *
+ * **Recursive, and that is the whole point.** `jobScopePredicate` composes
+ * nested `sql` fragments — the department arm is built separately and embedded
+ * in the outer expression. A nested fragment is neither a string chunk nor a
+ * bound parameter, so a flat walk renders the entire arm as a single `?` and
+ * every assertion about what is inside it silently passes against nothing.
+ * That is exactly how these two tests came to fail while the predicate they
+ * describe was correct.
+ */
+/** Stands in for every bound value. The shape is the subject, not the data. */
+const PARAM = '?';
+
+/** Literal SQL text arrives only as a `StringChunk`, whose `value` is a `string[]`. */
+function literalText(chunk: unknown): string | undefined {
+  if (typeof chunk !== 'object' || chunk === null) return undefined;
+  const value = (chunk as { value?: unknown }).value;
+  return Array.isArray(value) ? value.join('') : undefined;
+}
+
+function hasChunks(chunk: unknown): boolean {
+  return typeof chunk === 'object' && chunk !== null && 'queryChunks' in chunk;
+}
+
+function toText(fragment: unknown): string {
+  if (!hasChunks(fragment)) return PARAM;
+  const chunks = (fragment as { queryChunks: unknown[] }).queryChunks;
+
   return chunks
     .map((chunk) => {
-      if (typeof chunk === 'string') return chunk;
-      const value = chunk as { value?: unknown };
-      return Array.isArray(value.value) ? value.value.join('') : '?';
+      /* A nested fragment. Recurse, or its contents are invisible here. */
+      if (hasChunks(chunk)) return toText(chunk);
+
+      /* Everything that is not a StringChunk is an interpolated value.
+         Drizzle stores a plain JS string bare, so a **bare string is a bound
+         parameter, not SQL** — conflating the two is what let a department id
+         render as SQL text and made the parameterisation assertion below
+         assert nothing. */
+      return literalText(chunk) ?? PARAM;
     })
     .join('');
 }

@@ -22,12 +22,14 @@ import type { InvitationsController } from '../modules/identity/invitations.cont
 import { registerInvitationRoutes } from '../modules/identity/invitations.routes.js';
 import type { UsersService } from '../modules/identity/application/users.service.js';
 import { registerUserRoutes } from '../modules/identity/users.routes.js';
+import type { BootstrapAssembler } from '../bff/web/bootstrap.assembler.js';
 import type { JobsController } from '../modules/jobs/jobs.controller.js';
 import { registerJobRoutes } from '../modules/jobs/jobs.routes.js';
 import type { Config } from '../platform/config/config.types.js';
 import type { TokenVerifierPort } from '../shared/ports/token-issuer.js';
 import { registerAuthentication, requireAuth } from './authentication.js';
 import { registerAuthorization } from './authorization.js';
+import { registerWebBff } from './web-bff.js';
 import { describeForLog, toProblemDetails } from '../shared/errors/problem-details.js';
 import {
   assertRouteMetadata,
@@ -249,6 +251,11 @@ function registerModules(app: FastifyInstance, config: Config, deps: ApiDependen
   registerAuthentication(app, deps.tokenVerifier);
   registerIdentityModule(app, config, deps);
 
+  /* `/bff/web/*` on the same listener as `/v1/*` (AGENTS.md §4), behind the
+     same hooks. Registered after the versioned API so a BFF path can never
+     shadow one. */
+  registerWebBff(app, deps.webBootstrap);
+
   registerJobsModule(app, deps);
 
   /* Registered last so it runs after authentication: the hook order is what
@@ -264,6 +271,7 @@ export interface ApiDependencies {
   readonly jobsController: JobsController;
   readonly fieldVisibility: FieldVisibilityService;
   readonly usersService: UsersService;
+  readonly webBootstrap: BootstrapAssembler;
   /**
    * The application logger.
    *

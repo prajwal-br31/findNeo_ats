@@ -93,15 +93,13 @@ async function signupFixture(
 }
 
 describe('T-024: signup is one transaction', () => {
-  it('creates the company and its owner, and grants no role yet (D-050)', async () => {
+  it('creates the company and its owner, and grants no owner role (D-050)', async () => {
     const { companyId, userId } = await signupFixture('gamma-co', 'owner@gamma.test');
 
     const client = await ownerClient();
     try {
-      const { rows } = await client.query<{ owner: string; status: string; roles: string }>(
-        `SELECT c.owner_user_id AS owner, c.status,
-                (SELECT count(*) FROM user_roles ur WHERE ur.company_id = c.id) AS roles
-           FROM companies c WHERE c.id = $1`,
+      const { rows } = await client.query<{ owner: string; status: string }>(
+        `SELECT c.owner_user_id AS owner, c.status FROM companies c WHERE c.id = $1`,
         [companyId],
       );
 
@@ -111,10 +109,22 @@ describe('T-024: signup is one transaction', () => {
       expect(rows[0]?.owner).toBe(userId);
       expect(rows[0]?.status).toBe('pending_verification');
 
-      /* No role grant at signup (D-050). `trg_owner_requires_mfa` blocks
-         super_admin for a user without MFA, and the trigger is deliberately
-         not exempted — the grant moves to the end of enrolment instead. */
-      expect(Number(rows[0]?.roles)).toBe(0);
+      /* Asserted **by role key, not by counting**. A count of one passes just
+         as happily when that one role is super_admin, which is precisely the
+         violation D-050 exists to prevent — and precisely the mistake this
+         test failed to catch the first time.
+         `org_admin_hr` is granted so the founding user can reach the app at
+         all; `super_admin` waits for MFA enrolment, where the trigger will
+         allow it. */
+      const { rows: granted } = await client.query<{ key: string }>(
+        `SELECT r.key
+           FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+          WHERE ur.company_id = $1 AND ur.user_id = $2
+          ORDER BY r.key`,
+        [companyId, userId],
+      );
+
+      expect(granted.map((row) => row.key)).toEqual(['org_admin_hr']);
     } finally {
       await client.end();
     }

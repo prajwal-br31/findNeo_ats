@@ -39,7 +39,7 @@ export class AuthController {
   }
 
   async login(body: LoginBody, meta: RequestMeta): Promise<LoginResult> {
-    return this.#service.login(body.email, body.password, meta);
+    return this.#service.login(body.email, body.password, meta, body.mfaCode);
   }
 
   async refresh(refreshToken: string, meta: RequestMeta): Promise<LoginResult> {

@@ -10,6 +10,7 @@ import {
 } from '../../../shared/types/ids.js';
 import { authenticationFailed, reservedSlug, slugUnavailable } from '../identity.errors.js';
 import { RESERVED_SLUGS } from '../identity.schemas.js';
+import { secondFactorPasses } from './second-factor.js';
 import { hashToken, isUniqueViolation, newToken } from './token-utils.js';
 import type {
   AuthServiceDeps,
@@ -170,7 +171,12 @@ export class AuthService {
    * uniformity is the security property: an attacker who can distinguish
    * "wrong password" from "no such account" has a verified customer list.
    */
-  async login(email: string, password: string, meta: RequestMeta): Promise<LoginResult> {
+  async login(
+    email: string,
+    password: string,
+    meta: RequestMeta,
+    mfaCode?: string,
+  ): Promise<LoginResult> {
     const { uow, repository, hasher, clock, dummyHash } = this.#deps;
 
     /* Starts untenanted — the tenant is not known until the email resolves —
@@ -203,20 +209,21 @@ export class AuthService {
 
         if (!isUsable(user)) return { failedUserId: null };
 
-        if (user.mfaEnabled) {
-          /* 08 §3 step 6 issues a short-lived challenge here and no session. The
-           challenge token and POST /v1/auth/mfa/verify that consumes it are
-           not in this slice, so this returns the catalog's MFA code rather
-           than a challenge nothing can redeem. Failing closed: no session is
-           issued either way. */
-          throw new AppError('ERR_MFA_REQUIRED', {
-            detail: 'Multi-factor authentication is required.',
-          });
+        /* Bound here rather than after the second factor, because the factor
+           check reads `users.mfa_secret_encrypted` and that table is under
+           FORCE RLS — untenanted it returns no row, the check fails closed and
+           a correct code is rejected. Binding is safe at this point and not
+           before: the password has been verified, so the tenant is one the
+           caller has proven they belong to, and no earlier failure path has
+           bound anything. */
+        await bind(unsafeCompanyId(user.companyId));
+
+        if (user.mfaEnabled && !(await secondFactorPasses(tx, user, mfaCode, this.#deps))) {
+          return { failedUserId: user.id };
         }
 
         await repository.recordSuccessfulLogin(tx, user.id);
 
-        await bind(unsafeCompanyId(user.companyId));
         return this.#openSession(tx, user, meta);
       },
     );

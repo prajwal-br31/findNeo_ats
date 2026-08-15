@@ -62,6 +62,12 @@ export const LoginBody = Type.Object(
        schema gives a distinguishable, much faster response than a wrong one,
        which is a free oracle for password length. Login validates that a
        string arrived, and nothing about its shape. */
+    /* Optional so a client need not know in advance that an account carries a
+       second factor: it sends email and password, is told ERR_MFA_REQUIRED,
+       and asks the user for the code. Six digits exactly — a TOTP code has no
+       other shape, and this is not password-length-oracle territory because
+       the code is not a secret the user chose. */
+    mfaCode: Type.Optional(Type.String({ minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' })),
   },
   { additionalProperties: false },
 );

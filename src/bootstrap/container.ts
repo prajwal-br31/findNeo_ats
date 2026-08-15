@@ -49,6 +49,7 @@ import { FormsRepository } from '../modules/jobs/infrastructure/forms.repository
 import { JobsRepository } from '../modules/jobs/infrastructure/jobs.repository.js';
 import { PipelineRepository } from '../modules/jobs/infrastructure/pipeline.repository.js';
 import { JobsController } from '../modules/jobs/jobs.controller.js';
+import { BootstrapAssembler } from '../bff/web/bootstrap.assembler.js';
 
 /**
  * The composition root (ER-008).
@@ -76,6 +77,7 @@ export interface Container {
   readonly permissionsService: PermissionsService;
   readonly fieldVisibility: FieldVisibilityService;
   readonly usersService: UsersService;
+  readonly webBootstrap: BootstrapAssembler;
   readonly jobsController: JobsController;
   close(): Promise<void>;
 }
@@ -200,6 +202,7 @@ interface AccessGraph {
   readonly permissions: PermissionsService;
   readonly fieldVisibility: FieldVisibilityService;
   readonly users: UsersService;
+  readonly webBootstrap: BootstrapAssembler;
 }
 
 /** Departments, roles, permissions, masking and the platform surface. */
@@ -214,20 +217,30 @@ function buildAccess(
     cache,
   });
 
+  const departments = new DepartmentsService({
+    uow: database.uow,
+    repository: new DepartmentsRepository(),
+  });
+
   const controller = new AccessController(
-    new DepartmentsService({ uow: database.uow, repository: new DepartmentsRepository() }),
+    departments,
     new RolesService({ uow: database.uow, repository: new RolesRepository(), permissions }),
     new PlatformService({ uow: database.uow, repository: new PlatformRepository(), clock }),
   );
 
+  const users = new UsersService({
+    uow: database.uow,
+    repository: new UsersRepository(),
+    permissions,
+  });
+
   return {
     controller,
     permissions,
-    users: new UsersService({
-      uow: database.uow,
-      repository: new UsersRepository(),
-      permissions,
-    }),
+    users,
+    /* The BFF composes application services and nothing else (ER-002a). It is
+       built here, in the only place allowed to know both of them. */
+    webBootstrap: new BootstrapAssembler({ users, departments }),
     fieldVisibility: new FieldVisibilityService({
       uow: database.uow,
       repository: new FieldVisibilityRepository(),
@@ -313,6 +326,7 @@ export async function buildContainer(config: Config): Promise<Container> {
     permissionsService: access.permissions,
     fieldVisibility: access.fieldVisibility,
     usersService: access.users,
+    webBootstrap: access.webBootstrap,
     jobsController,
     cache,
     storage: buildStorage(config),
