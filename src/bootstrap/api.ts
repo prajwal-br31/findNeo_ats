@@ -23,6 +23,13 @@ import { registerInvitationRoutes } from '../modules/identity/invitations.routes
 import type { UsersService } from '../modules/identity/application/users.service.js';
 import { registerUserRoutes } from '../modules/identity/users.routes.js';
 import type { BootstrapAssembler } from '../bff/web/bootstrap.assembler.js';
+import type {
+  CandidatesController,
+  RequestActor as CandidatesActor,
+} from '../modules/candidates/candidates.controller.js';
+import { registerApplicationRoutes } from '../modules/candidates/applications.routes.js';
+import { registerCandidateRoutes } from '../modules/candidates/candidates.routes.js';
+import { registerPoolRoutes } from '../modules/candidates/pool.routes.js';
 import type { JobsController } from '../modules/jobs/jobs.controller.js';
 import { registerJobRoutes } from '../modules/jobs/jobs.routes.js';
 import type { Config } from '../platform/config/config.types.js';
@@ -174,6 +181,31 @@ async function registerDocumentation(app: FastifyInstance, config: Config): Prom
   });
 }
 
+/**
+ * The candidates module. Same actor resolver as jobs: permissions and field
+ * visibility are resolved once per request by the authorization hook, and
+ * every masking decision downstream reads that one result.
+ */
+function registerCandidatesModule(app: FastifyInstance, deps: ApiDependencies): void {
+  const actor = (request: unknown): CandidatesActor => {
+    const typed = request as FastifyRequest;
+    const auth = requireAuth(typed);
+    const permissions = typed.permissions;
+    const visibility = typed.fieldVisibility;
+    /* Fail closed rather than substituting an empty permission set: an empty
+       set would mask everything, which looks like working masking and hides
+       that the hook did not run. */
+    if (permissions === undefined || visibility === undefined) {
+      throw new Error('candidate routes require the authorization hook to have run');
+    }
+    return { companyId: auth.companyId, userId: auth.userId, permissions, visibility };
+  };
+
+  registerCandidateRoutes(app, { controller: deps.candidatesController, actor });
+  registerPoolRoutes(app, { controller: deps.candidatesController, actor });
+  registerApplicationRoutes(app, { controller: deps.candidatesController, actor });
+}
+
 /** The jobs module, and the actor resolver its routes read from. */
 function registerJobsModule(app: FastifyInstance, deps: ApiDependencies): void {
   registerJobRoutes(app, {
@@ -257,6 +289,7 @@ function registerModules(app: FastifyInstance, config: Config, deps: ApiDependen
   registerWebBff(app, deps.webBootstrap);
 
   registerJobsModule(app, deps);
+  registerCandidatesModule(app, deps);
 
   /* Registered last so it runs after authentication: the hook order is what
      makes `request.auth` available to the permission check. */
@@ -269,6 +302,7 @@ export interface ApiDependencies {
   readonly accessController: AccessController;
   readonly permissionsService: PermissionsService;
   readonly jobsController: JobsController;
+  readonly candidatesController: CandidatesController;
   readonly fieldVisibility: FieldVisibilityService;
   readonly usersService: UsersService;
   readonly webBootstrap: BootstrapAssembler;

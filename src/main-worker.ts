@@ -1,7 +1,8 @@
 import PgBoss from 'pg-boss';
 
 import { buildContainer } from './bootstrap/container.js';
-import { buildRegistry, startWorkers } from './bootstrap/worker.js';
+import { buildRegistry, startWorkers, type JobHandler } from './bootstrap/worker.js';
+import { createResumeCopyHandler } from './workers/documents/resume-copy.handler.js';
 import { loadConfig } from './platform/config/config.js';
 import { createLogger } from './platform/telemetry/logger.js';
 import { startTracing } from './platform/telemetry/tracing.js';
@@ -44,7 +45,21 @@ const fleet = await startWorkers({
   boss,
   uow: container.uow,
   config,
-  registry: buildRegistry({}),
+  /* One job so far. `documents` because copying an object is document work
+     and not recruitment logic — an AI ranking job queued behind a 10 MB copy
+     is exactly the starvation the domain split exists to prevent (ER-041a). */
+  registry: buildRegistry({
+    /* The double assertion is the seam between a narrowly-typed handler and
+       the registry's erased `TenantJobPayload`. The fleet reads the payload
+       from the job row, so no compiler can prove the shapes agree — the
+       registry name is the contract, and it is asserted here, once, in the
+       one file allowed to know both sides. */
+    documents: {
+      'resume.copy_for_application': createResumeCopyHandler(
+        container.resumeCopy,
+      ) as unknown as JobHandler,
+    },
+  }),
   onJobError: (domain, jobName, error) => {
     /* Ids and names only. A job payload carries `companyId` and other
        identifiers, and ER-048 does not exempt an error path from the rule

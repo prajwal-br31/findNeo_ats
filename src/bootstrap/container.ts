@@ -49,6 +49,9 @@ import { FormsRepository } from '../modules/jobs/infrastructure/forms.repository
 import { JobsRepository } from '../modules/jobs/infrastructure/jobs.repository.js';
 import { PipelineRepository } from '../modules/jobs/infrastructure/pipeline.repository.js';
 import { JobsController } from '../modules/jobs/jobs.controller.js';
+import type { ResumeCopyService } from '../modules/candidates/application/resume-copy.service.js';
+import type { CandidatesController } from '../modules/candidates/candidates.controller.js';
+import { buildCandidates } from './candidates-graph.js';
 import { BootstrapAssembler } from '../bff/web/bootstrap.assembler.js';
 
 /**
@@ -79,6 +82,9 @@ export interface Container {
   readonly usersService: UsersService;
   readonly webBootstrap: BootstrapAssembler;
   readonly jobsController: JobsController;
+  readonly candidatesController: CandidatesController;
+  /** Exposed for the worker fleet, which owns the copy job (T-065). */
+  readonly resumeCopy: ResumeCopyService;
   close(): Promise<void>;
 }
 
@@ -294,6 +300,37 @@ function buildPrimitives(config: Config): {
   };
 }
 
+/**
+ * Every module graph, and the two adapters they share.
+ *
+ * Extracted from `buildContainer` so that adding a module is one line there
+ * rather than four, and so the wiring of the modules is readable apart from
+ * the process-level concerns (pools, queue, mail) around it.
+ */
+function buildModules(deps: {
+  config: Config;
+  database: UnitOfWorkHandle;
+  queue: PgBossQueue;
+  clock: SystemClock;
+}): {
+  access: AccessGraph;
+  jobsController: JobsController;
+  candidates: ReturnType<typeof buildCandidates>;
+  cache: LruCacheAdapter;
+  storage: StoragePort;
+} {
+  const cache = new LruCacheAdapter();
+  const storage = buildStorage(deps.config);
+
+  return {
+    access: buildAccess(deps.database, cache, deps.clock),
+    jobsController: buildJobs(deps.database, cache),
+    candidates: buildCandidates(deps.database, storage, deps.queue),
+    cache,
+    storage,
+  };
+}
+
 export async function buildContainer(config: Config): Promise<Container> {
   const database: UnitOfWorkHandle = createUnitOfWork({
     url: config.database.url,
@@ -310,9 +347,7 @@ export async function buildContainer(config: Config): Promise<Container> {
 
   const invitationsController = buildInvitations(config, database, hasher, mailHandle.mail, clock);
 
-  const cache = new LruCacheAdapter();
-  const access = buildAccess(database, cache, clock);
-  const jobsController = buildJobs(database, cache);
+  const modules = buildModules({ config, database, queue, clock });
 
   return {
     config,
@@ -322,14 +357,16 @@ export async function buildContainer(config: Config): Promise<Container> {
     tokenVerifier,
     authController,
     invitationsController,
-    accessController: access.controller,
-    permissionsService: access.permissions,
-    fieldVisibility: access.fieldVisibility,
-    usersService: access.users,
-    webBootstrap: access.webBootstrap,
-    jobsController,
-    cache,
-    storage: buildStorage(config),
+    accessController: modules.access.controller,
+    permissionsService: modules.access.permissions,
+    fieldVisibility: modules.access.fieldVisibility,
+    usersService: modules.access.users,
+    webBootstrap: modules.access.webBootstrap,
+    jobsController: modules.jobsController,
+    candidatesController: modules.candidates.controller,
+    resumeCopy: modules.candidates.resumeCopy,
+    cache: modules.cache,
+    storage: modules.storage,
     mail: mailHandle.mail,
     uow: database.uow,
     idempotency: new DrizzleIdempotencyStore(),

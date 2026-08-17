@@ -169,6 +169,34 @@
       "when": 1786613397996,
       "tag": "0023_seed_phase2_defaults",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786613457996,
+      "tag": "0024_candidates",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1786613517996,
+      "tag": "0025_applications",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1786613577996,
+      "tag": "0026_rls_phase3",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1786613637996,
+      "tag": "0027_seed_phase3_defaults",
+      "breakpoints": true
     }
   ]
 }

@@ -43,6 +43,7 @@ const api = await buildApiServer(config, {
   accessController: container.accessController,
   permissionsService: container.permissionsService,
   jobsController: container.jobsController,
+  candidatesController: container.candidatesController,
   fieldVisibility: container.fieldVisibility,
   usersService: container.usersService,
   webBootstrap: container.webBootstrap,
